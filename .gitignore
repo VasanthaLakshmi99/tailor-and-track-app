@@ -1,0 +1,22 @@
+# Personal data: never upload (resumes, phone numbers, applications)
+tailortrack.db
+jobpilot.db
+*.db-journal
+resumes/
+*.xlsx
+*.csv
+*.zip
+
+# Secrets
+.streamlit/secrets.toml
+.env
+
+# Python / editors
+__pycache__/
+*.pyc
+.venv/
+venv/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

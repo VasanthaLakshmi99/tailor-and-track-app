@@ -1,0 +1,15 @@
+# Tailor&Track look and behaviour (Streamlit reads this automatically)
+[theme]
+base = "light"
+primaryColor = "#2F5BEA"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F6F9"
+textColor = "#14171F"
+font = "sans serif"
+baseRadius = "8px"
+
+[client]
+toolbarMode = "minimal"     # hides the Deploy button
+
+[browser]
+gatherUsageStats = false    # no "enter your email" question at start

@@ -1,0 +1,57 @@
+{
+  "manifest_version": 3,
+  "name": "Tailor&Track - J button",
+  "version": "1.2",
+  "description": "Save the job you are viewing to Tailor&Track in one click.",
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Save this job to Tailor&Track",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  },
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:8765/*",
+    "https://*.icims.com/*",
+    "https://*.greenhouse.io/*",
+    "https://*.lever.co/*",
+    "https://*.myworkdayjobs.com/*",
+    "https://*.taleo.net/*",
+    "https://*.jobvite.com/*",
+    "https://*.smartrecruiters.com/*",
+    "https://*.ashbyhq.com/*",
+    "https://*.workable.com/*",
+    "https://*.bamboohr.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://*.linkedin.com/*",
+        "https://*.dice.com/*",
+        "https://*.ziprecruiter.com/*",
+        "https://*.indeed.com/*",
+        "https://*.glassdoor.com/*",
+        "https://*.glassdoor.co.in/*",
+        "https://*.naukri.com/*"
+      ],
+      "js": [
+        "badges.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}

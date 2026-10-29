@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Tailor&amp;Track</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; width: 400px; font: 13px/1.4 "Segoe UI", system-ui, sans-serif; color: #14171F; background: #fff; }
+  header { display: flex; align-items: center; gap: 8px; padding: 12px 14px; border-bottom: 1px solid #E3E6EB; }
+  .logo { width: 24px; height: 24px; border-radius: 6px; background: #2F5BEA; color: #fff; font-weight: 700;
+          display: flex; align-items: center; justify-content: center; }
+  header b { font-size: 15px; }
+  header .for { margin-left: auto; font-weight: 600; color: #5B6270; font-size: 12px; }
+  #profile { height: 32px; max-width: 200px; border: 1px solid #2F5BEA; border-radius: 6px; font: inherit; font-weight: 600; color: #1F45C9; padding: 0 6px; }
+  #match .fit { margin-top: 4px; font-weight: 600; } #match .ok { color: #146B3A; } #match .no { color: #7A4B00; }
+  #status { margin: 12px 14px 0; padding: 10px 12px; border-radius: 8px; font-weight: 600; background: #EEF0F3; color: #3D4350; }
+  #status.new { background: #E6F4EC; color: #146B3A; }
+  #status.warning { background: #FFF6DB; color: #6B4700; }
+  #status.blocked, #status.error { background: #FDECEC; color: #A11D1D; }
+  #status.saved { background: #2F5BEA; color: #fff; }
+  #match { margin: 8px 14px 0; padding: 10px 12px; border: 1px solid #E3E6EB; border-radius: 8px; display: none; }
+  #match .pct { font-size: 22px; font-weight: 700; margin-right: 6px; }
+  #match .hi { color: #146B3A; } #match .mid { color: #7A4B00; } #match .lo { color: #A11D1D; }
+  #match .miss { margin-top: 4px; color: #3D4350; }
+  #match .kw { display: inline-block; background: #FFF1E0; color: #7A3E00; border-radius: 5px; padding: 1px 6px; margin: 2px 3px 0 0; font-size: 12px; }
+  form { padding: 10px 14px 14px; display: flex; flex-direction: column; gap: 8px; }
+  label { font-weight: 600; font-size: 12px; display: flex; justify-content: space-between; }
+  label span { font-weight: 400; color: #5B6270; }
+  input, textarea { width: 100%; border: 1px solid #CDD2DA; border-radius: 6px; padding: 7px 9px; font: inherit; margin-top: 3px; }
+  textarea { height: 110px; resize: vertical; }
+  .row { display: flex; gap: 8px; }
+  .row > div { flex: 1; }
+  button { height: 38px; border-radius: 8px; font: inherit; font-weight: 600; cursor: pointer; }
+  #save { background: #2F5BEA; color: #fff; border: 0; font-size: 14px; }
+  #save:disabled { background: #B9C2D0; cursor: not-allowed; }
+  #sel { background: #fff; border: 1px solid #CDD2DA; color: #14171F; }
+</style>
+</head>
+<body>
+<header><div class="logo">J</div><b>Tailor&amp;Track</b>
+  <label for="profile" class="for">For</label><select id="profile" aria-label="Profile"></select></header>
+<div id="status">Reading this page…</div>
+<div id="match"></div>
+<form id="f">
+  <div class="row">
+    <div><label for="company">Company name</label><input id="company"></div>
+    <div><label for="title">Role title</label><input id="title"></div>
+  </div>
+  <div><label for="location">Location</label><input id="location"></div>
+  <div><label for="url">Apply link</label><input id="url"></div>
+  <div><label for="jd">Job description <span id="jdcount"></span></label><textarea id="jd"></textarea></div>
+  <button type="button" id="sel">Use text I selected on the page as JD</button>
+  <button type="submit" id="save" disabled>Save to Tailor&amp;Track</button>
+</form>
+<script src="popup.js"></script>
+</body>
+</html>
