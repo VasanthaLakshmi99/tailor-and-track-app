@@ -11,7 +11,7 @@ Different spellings count as the same skill: "k8s" = "Kubernetes",
 "Amazon Web Services" = "AWS", "CI/CD" = "continuous integration", etc.
 This is an estimate to sort jobs - not an employer's ATS score.
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import re
 
 # canonical name: other spellings
@@ -157,7 +157,20 @@ def find_skills(text, strict=False, extra=()):
 
 
 def score(jd, resume_text):
-    """Returns (percent_int, matched_list, missing_list)."""
+    """Returns (percent_int, matched_list, missing_list): how many of the JD's hard-skill keywords
+    (dictionary skills + common ATS phrases + tool names in the requirements) the resume has."""
+    if not (jd or "").strip() or not (resume_text or "").strip():
+        return 0, [], []
+    hard = [k for k in jd_keywords(jd, resume_text) if k[3] == "hard"]
+    if not hard:
+        return _dictionary_score(jd, resume_text)
+    matched = [k for k in hard if has_keyword(resume_text, k[0], k[1])]
+    pct = round(100 * sum(k[2] for k in matched) / sum(k[2] for k in hard))
+    return pct, [k[0] for k in matched], [k[0] for k in hard if k not in matched]
+
+
+def _dictionary_score(jd, resume_text):
+    """The older score: only skills from the dictionary."""
     if not (jd or "").strip() or not (resume_text or "").strip():
         return 0, [], []
     extra = learn_skills(resume_text)
@@ -321,3 +334,195 @@ def roles_from_resume(resume_text, limit=14):
     if not out:
         out = guess_roles(resume_text)
     return out[:limit]
+
+
+# ---------------------------------------------------------------- years of experience a JD asks for
+_YEARS = re.compile(r"(?:minimum of|min\.?|at least|over)?\s*(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|to)\s*(\d{1,2})\s*)?\+?\s*"
+                    r"(?:years?|yrs?)\b(.{0,60})", re.I)
+_EXP_CONTEXT = re.compile(r"experience|exp\b|professional|industry|hands-on|working|work in|background|relevant|"
+                          r"in (?:devops|cloud|software|it|sre|engineering)|of (?:devops|cloud|software|it|sre|engineering)", re.I)
+_NOT_EXP = re.compile(r"old|founded|history|in business|anniversary|warranty|award|clearance|citizen|degree", re.I)
+
+
+def jd_years(jd):
+    """Years of experience the JD asks for (the highest minimum it mentions), or None if it doesn't say.
+    '5+ years of experience' -> 5, '3-5 years' -> 3, 'minimum of 7 years of IT experience' -> 7."""
+    best = None
+    for m in _YEARS.finditer(jd or ""):
+        low, tail = int(m.group(1)), m.group(3) or ""
+        before = (jd or "")[max(0, m.start() - 40):m.start()]
+        if low > 20 or _NOT_EXP.search(tail[:30]) or _NOT_EXP.search(before):
+            continue
+        if not (_EXP_CONTEXT.search(tail) or _EXP_CONTEXT.search(before)):
+            continue
+        best = low if best is None else max(best, low)
+    for m in re.finditer(r"experience\s*(?:required|level)?\s*[:\-–]\s*(\d{1,2})\s*(?:\+|or above|or more|years?|yrs?)",
+                         jd or "", re.I):                    # "EXPERIENCE : 12 OR ABOVE"
+        low = int(m.group(1))
+        if low <= 20:
+            best = low if best is None else max(best, low)
+    return best
+
+
+# ---------------------------------------------------------------- ATS keywords and report
+# Phrases ATS tools (Jobscan, Resume Worded ...) commonly pick from tech JDs that are not single tools.
+EXTRA_TERMS = [
+    "troubleshooting", "scripting", "debugging", "performance tuning", "capacity planning", "scalability",
+    "load balancing", "cost optimization", "root cause analysis", "on-call", "incident response", "incident management",
+    "change management", "release management", "configuration management", "distributed systems", "system design",
+    "data structures", "algorithms", "compliance", "logging", "alerting", "automation", "cloud migration",
+    "orchestration", "virtualization", "backup", "unit testing", "integration testing", "code review", "mentoring",
+    "documentation", "sdlc", "slos", "slas", "production support", "patching", "linux administration", "cloud security",
+    "cost management", "finops", "data pipelines", "caching", "message queues", "event-driven", "blue-green", "canary",
+    "rollback", "postmortems", "runbooks", "high availability", "disaster recovery", "infrastructure as code",
+    "continuous integration", "continuous delivery", "continuous deployment", "version control", "best practices",
+    "security", "networking", "monitoring", "observability", "microservices", "containerization", "deployment",
+    "infrastructure", "cloud infrastructure", "reliability", "performance", "testing", "automation testing",
+]
+_EXTRA_PATTERNS = {t: _pattern(t) for t in EXTRA_TERMS if t not in _KNOWN}
+SOFT_TERMS = sorted(SOFT | {"problem-solving", "communication skills", "interpersonal", "stakeholder", "ownership",
+                            "mentoring", "self-starter", "fast-paced", "cross-functional", "analytical"})
+_SOFT_PATTERNS = {t: _pattern(t) for t in SOFT_TERMS}
+_CAPS = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Za-z0-9+#./-]*[A-Z0-9][A-Za-z0-9+#.-]*)(?![A-Za-z0-9])")
+_CAPS_STOP = {"US", "USA", "UK", "EEO", "EOE", "LLC", "INC", "LTD", "NJ", "NY", "CA", "TX", "PTO", "HR", "CEO", "CTO",
+              "FAQ", "ID", "IT", "OK", "PST", "EST", "CST", "EU", "W2", "C2C", "H1B", "GC", "USC", "OPT", "CPT", "TN",
+              "EAD", "DOE", "COVID", "ADA", "VP", "AM", "PM", "II", "III", "IV", "JD", "FTE", "WFH", "ASAP", "AND", "THE"}
+_REQ_LINE = re.compile(r"experience|knowledge|proficien|familiar|skill|required|requirement|preferred|must|nice to have|"
+                       r"qualification|hands-on|expert|strong|working with|using|tools?|technolog|stack", re.I)
+
+
+_NOISE = {"services", "service", "management", "support", "systems", "system", "tools", "platforms", "platform",
+          "applications", "solutions", "operations", "process", "processes", "incident", "testing", "engineering",
+          "development", "software", "technology", "data", "cloud", "infrastructure", "performance", "security"}
+
+
+def jd_keywords(jd, resume_text="", company=""):
+    """ATS keywords of a JD, most important first: [(display, key, weight, kind)] with kind 'hard' or 'soft'.
+    Uses the skills dictionary, the resume's own Skills list, common ATS phrases and tool names in the requirements."""
+    jd = jd or ""
+    low = jd.lower()
+    extra = learn_skills(resume_text) if resume_text else []
+    out, seen = [], set()
+
+    def first_pos(pats):
+        pos = [m.start() for p in pats for m in [p.search(low)] if m]
+        return min(pos) if pos else 10 ** 6
+
+    def spelled(pats, default):
+        for p in pats:
+            m = p.search(low)
+            if m:
+                return jd[m.start():m.end()]
+        return default
+
+    items = []
+    for name, n in find_skills(jd, strict=True, extra=extra).items():
+        pats = [_pattern(a) for a in [name] + SKILLS.get(name, []) if a.lower() not in AMBIGUOUS] or [_pattern(name)]
+        items.append((spelled(pats, name), name.lower(), min(n, 3), "hard", first_pos(pats)))
+    for t, p in _EXTRA_PATTERNS.items():
+        n = len(p.findall(low))
+        if n:
+            items.append((spelled([p], t), t, min(n, 3), "hard", first_pos([p])))
+    company_words = {w for w in re.split(r"\W+", (company or "").lower()) if w}
+    for line in jd.splitlines() or [jd]:
+        if not _REQ_LINE.search(line):
+            continue
+        for m in _CAPS.finditer(line):
+            tok = m.group(1).strip(".-/")
+            up = sum(c.isupper() for c in tok) + sum(c.isdigit() for c in tok)
+            if len(tok) < 2 or len(tok) > 20 or up < 2 or tok.upper() in _CAPS_STOP or tok.lower() in company_words:
+                continue
+            if tok.lower() in _KNOWN or any(tok.lower() == i[1] for i in items):
+                continue
+            items.append((tok, tok.lower(), min(len(_pattern(tok).findall(low)), 3), "hard", m.start()))
+    for t, p in _SOFT_PATTERNS.items():
+        n = len(p.findall(low))
+        if n:
+            items.append((spelled([p], t), t, 1, "soft", first_pos([p])))
+    keys = {i[1] for i in items}
+    for disp, key, w, kind, pos in sorted(items, key=lambda i: (i[3] != "hard", -i[2], i[4])):
+        if key in seen or key in _NOISE or key in company_words or (company and key in company.lower()):
+            continue
+        if " " not in key and any(key != k and re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", k) for k in keys):
+            continue                     # "automation" when "automation testing" is there too
+        seen.add(key)
+        out.append((disp.strip(), key, w, kind))
+    return out
+
+
+def has_keyword(text, display, key):
+    """Is this JD keyword in the text (any known spelling)?"""
+    low = (text or "").lower()
+    pats = [_pattern(display), _pattern(key)]
+    for name, alts in SKILLS.items():
+        if name.lower() == key:
+            pats += [_pattern(a) for a in [name] + alts]
+            break
+    return any(p.search(low) for p in pats)
+
+
+DEGREES = [("phd", r"\bph\.?d\b|doctorate"), ("master", r"\bmaster'?s?\b|\bm\.?s\.?\b|\bmba\b|\bm\.?tech\b|\bmca\b"),
+           ("bachelor", r"\bbachelor'?s?\b|\bb\.?s\.?\b|\bb\.?e\.?\b|\bb\.?tech\b|\bbca\b|undergraduate degree|\bdegree\b")]
+
+
+def _degree(text):
+    for name, pat in DEGREES:
+        if re.search(pat, text or "", re.I):
+            return name
+    return None
+
+
+def ats_report(jd, resume_text, job_title="", company=""):
+    """ATS-style check of a resume against a JD, like Jobscan: a score out of 100 and what to fix.
+    hard skills 55 · job title 15 · soft skills 10 · experience 10 · education 5 · format 5"""
+    kws = jd_keywords(jd, resume_text, company)
+    hard = [k for k in kws if k[3] == "hard"]
+    soft = [k for k in kws if k[3] == "soft"]
+    low = (resume_text or "").lower()
+
+    def count(disp, key):
+        pats = [_pattern(disp), _pattern(key)] + [_pattern(a) for n, al in SKILLS.items() if n.lower() == key for a in [n] + al]
+        return max(len(p.findall(low)) for p in pats)
+
+    got = {k[1]: count(k[0], k[1]) for k in hard}
+    # a keyword the JD repeats should be in the resume more than once (skills list + work experience)
+    hard_pts = sum(k[2] * min(1.0, got[k[1]] / min(k[2], 2)) for k in hard)
+    hard_pct = round(100 * hard_pts / sum(k[2] for k in hard)) if hard else 0
+    missing = [k[0] for k in hard if not got[k[1]]]
+    too_few = [k[0] for k in hard if got[k[1]] and got[k[1]] < min(k[2], 2)]
+    soft_pct = round(100 * sum(1 for k in soft if count(k[0], k[1])) / len(soft)) if soft else 100
+    soft_missing = [k[0] for k in soft if not count(k[0], k[1])]
+
+    t = re.sub(r"\s*[\(\[|].*$|\s+-\s+.*$", "", job_title or "").strip().lower()
+    core = " ".join(w for w in re.sub(r"[^a-z0-9+#/ ]", " ", t).split() if w not in LEVEL_WORDS)
+    title_pct = 100 if t and t in low else (70 if core and core in low else 0)
+
+    need = jd_years(jd)
+    have = years_of_experience(resume_text)
+    exp_pct = 100 if need is None or (have is not None and have >= need) else (60 if have and have >= need - 1 else 0)
+    want_deg, has_deg = _degree(jd), _degree(resume_text)
+    order = {"bachelor": 1, "master": 2, "phd": 3}
+    edu_pct = 100 if not want_deg or (has_deg and order[has_deg] >= order[want_deg]) else 0
+    fmt = [bool(re.search(r"@", resume_text or "")), bool(re.search(r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}|\+\d{6,}", resume_text or "")),
+           bool(re.search(r"^\s*(work |professional )?experience\b", resume_text or "", re.I | re.M)),
+           bool(re.search(r"^\s*(technical |core )?skills\b", resume_text or "", re.I | re.M)),
+           bool(re.search(r"^\s*education\b", resume_text or "", re.I | re.M))]
+    fmt_pct = round(100 * sum(fmt) / len(fmt))
+
+    score = round(0.55 * hard_pct + 0.15 * title_pct + 0.10 * soft_pct + 0.10 * exp_pct + 0.05 * edu_pct + 0.05 * fmt_pct)
+    tips = []
+    if missing:
+        tips.append("Add the missing hard skills you really have: " + ", ".join(missing[:10]))
+    if too_few:
+        tips.append("Mention these again in a work-experience bullet (the JD repeats them): " + ", ".join(too_few[:8]))
+    if title_pct < 100 and job_title:
+        tips.append(f"Use the job title \"{job_title}\" (or its core words) in the summary")
+    if soft_missing:
+        tips.append("Soft skills the JD asks for: " + ", ".join(soft_missing[:6]))
+    if exp_pct < 100:
+        tips.append(f"The JD asks for {need}+ years; the resume shows {have or '?'}")
+    if edu_pct < 100:
+        tips.append(f"The JD asks for a {want_deg}'s degree")
+    return {"score": score, "hard": hard_pct, "title": title_pct, "soft": soft_pct, "experience": exp_pct,
+            "education": edu_pct, "format": fmt_pct, "missing": missing, "too_few": too_few,
+            "soft_missing": soft_missing, "tips": tips, "keywords": len(hard)}

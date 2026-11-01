@@ -120,6 +120,41 @@ $("f").addEventListener("submit", async (e) => {
   }
 });
 
+// fill the application form on this page with the profile's saved answers + resume (never submits)
+const NAMES = { first_name: "first name", last_name: "last name", full_name: "name", email: "email", phone: "phone",
+  linkedin: "LinkedIn", github: "GitHub", website: "website", city: "city", state: "state", zip: "ZIP", country: "country",
+  address: "address", location: "location", current_company: "company", current_title: "title", years: "years",
+  work_auth: "work authorization", sponsorship: "sponsorship", relocate: "relocation", salary: "salary",
+  notice: "start date", visa: "visa" };
+$("fill").addEventListener("click", async () => {
+  const msg = $("fillmsg");
+  msg.style.display = "block";
+  msg.textContent = "Filling…";
+  try {
+    const j = job();
+    const r = await call("/apply_info", j);
+    const resume = r.resume_b64 ? { b64: r.resume_b64, name: r.resume_name } : null;
+    await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["fill.js"] });
+    const out = await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: (info, res) => (window.__ttFill ? window.__ttFill(info, res) : null),
+      args: [r.info || {}, resume],
+    });
+    const filled = [...new Set(out.flatMap((o) => (o && o.result && o.result.filled) || []))];
+    const attached = out.some((o) => o && o.result && o.result.attached);
+    if (!filled.length && !attached) {
+      msg.textContent = "No empty form fields found here. Open the application form (click Apply on the job page), then try again. " +
+        "Add more answers in Tailor&Track → Profiles → ✍️ Application form answers.";
+      return;
+    }
+    msg.textContent = `✓ Filled ${filled.length}: ${filled.map((k) => NAMES[k] || k).join(", ")}` +
+      (attached ? ` · attached ${r.resume_kind} resume ${r.resume_name}` : (resume ? " · attach the resume yourself" : "")) +
+      ". Blue boxes = filled. Check every answer, then click Submit yourself.";
+  } catch (e) {
+    msg.textContent = "Can't fill this page (the app is not running, or the site blocks extensions).";
+  }
+});
+
 // profile picker: which candidate this job is for
 async function loadProfiles() {
   const r = await call("/profiles");

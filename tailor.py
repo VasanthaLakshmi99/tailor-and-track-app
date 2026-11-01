@@ -6,7 +6,7 @@
 - save_tailored(): stores the uploaded resume as Company_Role.pdf, checks its new
   match % and remembers it for the job (used later in Apply & Track and the report).
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import json
 import re
 
@@ -61,9 +61,10 @@ def save_tailored(job, filename, data):
     path.write_bytes(data)
     text = db.extract_text(filename, data)
     pct, _, missing = matching.score(job.get("jd") or "", text)
+    rep = matching.ats_report(job.get("jd") or "", text, job.get("title") or "", job.get("company") or "")
     with db.connect() as con:
-        con.execute("UPDATE jobs SET resume_file=?, tailored_match=?, tailor_status='done', tailor_note=NULL WHERE id=?",
-                    (str(path), pct, job["id"]))
+        con.execute("UPDATE jobs SET resume_file=?, tailored_match=?, tailor_status='done', tailor_note=NULL, "
+                    "ats_after=?, ats_json=? WHERE id=?", (str(path), pct, rep["score"], json.dumps(rep), job["id"]))
     return path, pct, missing
 
 
@@ -83,3 +84,37 @@ def auto_tailor(job, ticked=(), remember=True):
         raise ValueError("This job has no JD yet. Open it and click the J button first")
     data = autotailor.to_pdf(autotailor.tailor(job, resume, confirmed))
     return save_tailored(job, "auto.pdf", data)
+
+
+def guess_job(filename, jobs):
+    """Which job a tailored PDF belongs to, from its file name ('Orbit_Health_Senior_DevOps_Engineer.pdf')."""
+    import difflib
+    stem = re.sub(r"\.pdf$", "", filename or "", flags=re.I)
+    stem = re.sub(r"\(\d+\)$", "", stem).strip()                  # "Name (1).pdf" from a second download
+    low = re.sub(r"[^a-z0-9]+", " ", stem.lower()).strip()
+    best, best_score = None, 0.0
+    for j in jobs:
+        target = re.sub(r"[^a-z0-9]+", " ", file_name(j, "").lower()).strip()
+        company = re.sub(r"[^a-z0-9]+", " ", (j.get("company") or "").lower()).strip()
+        score = difflib.SequenceMatcher(None, low, target).ratio()
+        if company and company in low:
+            score += 0.3
+        if score > best_score:
+            best, best_score = j, score
+    return best if best_score >= 0.55 else None
+
+
+def resumes_zip(jobs):
+    """ZIP with the tailored PDF of each job. Returns (bytes, how_many)."""
+    import io
+    import zipfile
+    from pathlib import Path
+    buf, n, seen = io.BytesIO(), 0, set()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for j in jobs:
+            p = Path(j.get("resume_file") or "")
+            if j.get("resume_file") and p.exists() and p.name not in seen:
+                z.write(p, p.name)
+                seen.add(p.name)
+                n += 1
+    return buf.getvalue(), n

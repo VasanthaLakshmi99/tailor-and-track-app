@@ -1,4 +1,4 @@
-"""Collects jobs posted in the last 24 hours, automatically, every day.
+"""Collects new jobs (posted within the Date posted window) automatically, every few hours.
 
 Where from (all free):
   - company career sites, no key: Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday,
@@ -12,7 +12,7 @@ automatic collection and it can get accounts blocked. Use the J button there.
 Each job is kept for a profile only if its title fits the profile's target roles and
 (if set) its locations. Every job goes through the normal duplicate check.
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import html
 import json
 import re
@@ -28,14 +28,48 @@ import matching
 UA = {"User-Agent": "TailorTrack/1.0 (personal job tracker)"}
 PAUSE = 0.7            # seconds between boards, to be polite
 WINDOW_HOURS = 24          # default; changed with the "Date posted" filter on Find jobs
-WINDOWS = {"Past 24 hours": 24, "Past 3 days": 72, "Past week": 168, "Past month": 720}   # like LinkedIn / Dice
+WINDOWS = {"Past 30 minutes": 0.5, "Past 1 hour": 1, "Past 3 hours": 3, "Past 6 hours": 6, "Past 10 hours": 10,
+           "Past 24 hours": 24, "Past 3 days": 72, "Past week": 168, "Past month": 720}
 
 
 def window_hours():
+    """How far back to collect (hours, can be 0.5). Set with the Date posted filter on Find jobs."""
     try:
-        return int(db.setting("window_hours", str(WINDOW_HOURS)) or WINDOW_HOURS)
+        h = float(db.setting("window_hours", str(WINDOW_HOURS)) or WINDOW_HOURS)
+        return h if h > 0 else WINDOW_HOURS
     except ValueError:
         return WINDOW_HOURS
+
+
+def window_label(h=None):
+    h = window_hours() if h is None else h
+    named = next((k for k, v in WINDOWS.items() if v == h), None)
+    if named:
+        return named
+    return f"Past {h:g} hours" if h < 48 else f"Past {h / 24:g} days"
+
+
+# ---------------------------------------------------------------- experience filter (per profile)
+def exp_range(p):
+    """(min, max) years a job may ask for. Default: anything up to the candidate's years + 2."""
+    pid = (p or {}).get("id")
+    years = matching.years_of_experience((p or {}).get("text") or "")
+    def num(key, default):
+        try:
+            v = db.setting(f"{key}_{pid}", "")
+            return float(v) if v != "" else default
+        except ValueError:
+            return default
+    return num("exp_min", 0.0), num("exp_max", float(years + 2) if years is not None else 99.0)
+
+
+def exp_ok(jd, p):
+    """True if the years the JD asks for are inside the profile's range (or the JD doesn't say)."""
+    need = matching.jd_years(jd or "")
+    if need is None:
+        return True
+    lo, hi = exp_range(p)
+    return lo <= need <= hi
 _lock = threading.Lock()
 
 SUGGESTED = [  # well-known companies with public boards; Tailor&Track checks each one on the first collect
@@ -479,12 +513,15 @@ def _breezy_jd(page_url):
     return _text(m.group(1) if m else "")
 
 
+_COUNTRIES_NOW = ["United States"]   # set by run(): the countries the profiles want
+
+
 def fetch_amazon(token, name):
     """amazon.jobs public search (the JSON the site itself uses). Free, no key."""
     out, seen = [], set()
-    for term in _search_terms():
+    for term, country in [(t, c) for c in _COUNTRIES_NOW for t in _search_terms()]:
         r = _get("https://www.amazon.jobs/en/search.json",
-                 params={"base_query": term, "country": "USA", "sort": "recent", "result_limit": 50, "offset": 0})
+                 params={"base_query": term, "country": COUNTRIES[country][1], "sort": "recent", "result_limit": 50, "offset": 0})
         if r.status_code == 404:
             raise LookupError("board not found")
         r.raise_for_status()
@@ -508,9 +545,9 @@ def fetch_amazon(token, name):
 def fetch_microsoft(token, name):
     """Microsoft careers public search (the JSON the site itself uses). Free, no key."""
     out, seen = [], set()
-    for term in _search_terms():
+    for term, country in [(t, c) for c in _COUNTRIES_NOW for t in _search_terms()]:
         r = _get("https://gcsservices.careers.microsoft.com/search/api/v1/search",
-                 params={"q": term, "lc": "United States", "l": "en_us", "pg": 1, "pgSz": 20, "o": "Recent", "flt": "true"})
+                 params={"q": term, "lc": country, "l": "en_us", "pg": 1, "pgSz": 20, "o": "Recent", "flt": "true"})
         if r.status_code == 404:
             raise LookupError("board not found")
         r.raise_for_status()
@@ -563,14 +600,15 @@ def fetch_jooble(search_terms, location="United States"):
     return out
 
 
-def fetch_jsearch(search_terms, country="us"):
+def fetch_jsearch(search_terms, country="us", where="USA"):
     """JSearch on RapidAPI (free plan: 200 searches/month). Reads Google for Jobs, so it includes
     LinkedIn, Indeed, ZipRecruiter, Dice and company sites, with the full JD."""
     headers = {**UA, "X-RapidAPI-Key": db.setting("rapidapi_key"), "X-RapidAPI-Host": "jsearch.p.rapidapi.com"}
     out, seen = [], set()
     for term in search_terms[:JSEARCH_TERMS]:
         r = requests.get("https://jsearch.p.rapidapi.com/search", headers=headers, timeout=30,
-                         params={"query": f"{term} in USA", "date_posted": {24: "today", 72: "3days", 168: "week"}.get(window_hours(), "month"), "country": country,
+                         params={"query": f"{term} in {where}", "date_posted": "today" if window_hours() <= 24 else "3days" if window_hours() <= 72 else
+                                               "week" if window_hours() <= 168 else "month", "country": country,
                                  "page": 1, "num_pages": 1})
         if r.status_code in (401, 403):
             raise RuntimeError("API key not accepted: check the RapidAPI key and that you subscribed to JSearch (free plan)")
@@ -594,12 +632,12 @@ def fetch_jsearch(search_terms, country="us"):
     return out
 
 
-def fetch_himalayas(search_terms):
+def fetch_himalayas(search_terms, country="US"):
     """Himalayas (himalayas.app/api): free, no key. Remote jobs; searched for US-friendly ones."""
     out, seen = [], set()
     for term in search_terms[:6]:
         for page in (1, 2):
-            r = _get("https://himalayas.app/jobs/api/search", params={"q": term, "country": "US", "sort": "recent", "page": page})
+            r = _get("https://himalayas.app/jobs/api/search", params={"q": term, "country": country, "sort": "recent", "page": page})
             if not r.ok:
                 break
             jobs = r.json().get("jobs") or []
@@ -770,8 +808,101 @@ def _is_us(raw):
     return any(m in US_STATES for m in re.findall(r"(?:,|\s|-)\s*([A-Z]{2})\b", raw))   # "Austin, TX"
 
 
+# ---------------------------------------------------------------- countries (for the profile's location)
+# name: (ISO-2, ISO-3, words that mean this country in a job location)
+COUNTRIES = {
+    "United States": ("us", "USA", ["usa", "u.s.", "u.s.a", "united states", "america"]),
+    "India": ("in", "IND", ["india", "bengaluru", "bangalore", "hyderabad", "pune", "chennai", "mumbai", "delhi", "gurgaon",
+                            "gurugram", "noida", "kolkata", "ahmedabad", "kochi", "coimbatore", "trivandrum", "jaipur", "indore"]),
+    "United Kingdom": ("gb", "GBR", ["united kingdom", "uk", "england", "scotland", "wales", "london", "manchester",
+                                     "birmingham", "edinburgh", "glasgow", "leeds", "bristol", "cambridge", "oxford", "belfast"]),
+    "Canada": ("ca", "CAN", ["canada", "toronto", "vancouver", "montreal", "ottawa", "calgary", "waterloo", "edmonton",
+                             "ontario", "british columbia", "quebec", "alberta"]),
+    "Australia": ("au", "AUS", ["australia", "sydney", "melbourne", "brisbane", "perth", "adelaide", "canberra"]),
+    "Germany": ("de", "DEU", ["germany", "deutschland", "berlin", "munich", "münchen", "hamburg", "frankfurt", "cologne",
+                              "köln", "stuttgart", "düsseldorf", "dusseldorf", "leipzig"]),
+    "Netherlands": ("nl", "NLD", ["netherlands", "amsterdam", "rotterdam", "utrecht", "eindhoven", "the hague"]),
+    "Ireland": ("ie", "IRL", ["ireland", "dublin", "cork", "galway"]),
+    "France": ("fr", "FRA", ["france", "paris", "lyon", "toulouse", "nice", "marseille"]),
+    "Spain": ("es", "ESP", ["spain", "madrid", "barcelona", "valencia", "malaga"]),
+    "Portugal": ("pt", "PRT", ["portugal", "lisbon", "porto"]),
+    "Italy": ("it", "ITA", ["italy", "milan", "rome", "turin"]),
+    "Switzerland": ("ch", "CHE", ["switzerland", "zurich", "zürich", "geneva", "basel", "lausanne"]),
+    "Austria": ("at", "AUT", ["austria", "vienna"]),
+    "Belgium": ("be", "BEL", ["belgium", "brussels", "antwerp"]),
+    "Sweden": ("se", "SWE", ["sweden", "stockholm", "gothenburg"]),
+    "Denmark": ("dk", "DNK", ["denmark", "copenhagen"]),
+    "Norway": ("no", "NOR", ["norway", "oslo"]),
+    "Finland": ("fi", "FIN", ["finland", "helsinki"]),
+    "Poland": ("pl", "POL", ["poland", "warsaw", "krakow", "kraków", "wroclaw", "gdansk"]),
+    "Czech Republic": ("cz", "CZE", ["czech", "czechia", "prague", "brno"]),
+    "Romania": ("ro", "ROU", ["romania", "bucharest", "cluj"]),
+    "Singapore": ("sg", "SGP", ["singapore"]),
+    "United Arab Emirates": ("ae", "ARE", ["united arab emirates", "uae", "dubai", "abu dhabi"]),
+    "Saudi Arabia": ("sa", "SAU", ["saudi", "riyadh", "jeddah"]),
+    "Qatar": ("qa", "QAT", ["qatar", "doha"]),
+    "Japan": ("jp", "JPN", ["japan", "tokyo", "osaka"]),
+    "New Zealand": ("nz", "NZL", ["new zealand", "auckland", "wellington"]),
+    "Malaysia": ("my", "MYS", ["malaysia", "kuala lumpur"]),
+    "Philippines": ("ph", "PHL", ["philippines", "manila", "cebu"]),
+    "South Africa": ("za", "ZAF", ["south africa", "johannesburg", "cape town"]),
+    "Israel": ("il", "ISR", ["israel", "tel aviv"]),
+    "Brazil": ("br", "BRA", ["brazil", "são paulo", "sao paulo", "rio de janeiro"]),
+    "Mexico": ("mx", "MEX", ["mexico", "mexico city", "guadalajara", "monterrey"]),
+    "China": ("cn", "CHN", ["china", "beijing", "shanghai", "shenzhen"]),
+    "Hong Kong": ("hk", "HKG", ["hong kong"]),
+    "Vietnam": ("vn", "VNM", ["vietnam", "ho chi minh", "hanoi"]),
+    "Pakistan": ("pk", "PAK", ["pakistan", "karachi", "lahore", "islamabad"]),
+    "Bangladesh": ("bd", "BGD", ["bangladesh", "dhaka"]),
+    "Sri Lanka": ("lk", "LKA", ["sri lanka", "colombo"]),
+}
+REGIONS = {  # a "remote" job open to a whole region
+    "europe": ["United Kingdom", "Germany", "Netherlands", "Ireland", "France", "Spain", "Portugal", "Italy", "Switzerland",
+               "Austria", "Belgium", "Sweden", "Denmark", "Norway", "Finland", "Poland", "Czech Republic", "Romania"],
+    "eu": ["Germany", "Netherlands", "Ireland", "France", "Spain", "Portugal", "Italy", "Austria", "Belgium", "Sweden",
+           "Denmark", "Finland", "Poland", "Czech Republic", "Romania"],
+    "emea": ["United Kingdom", "Germany", "Netherlands", "Ireland", "France", "Spain", "Portugal", "Italy", "Switzerland",
+             "Austria", "Belgium", "Sweden", "Denmark", "Norway", "Finland", "Poland", "Czech Republic", "Romania",
+             "United Arab Emirates", "Saudi Arabia", "Qatar", "Israel", "South Africa"],
+    "apac": ["India", "Australia", "Singapore", "Japan", "New Zealand", "Malaysia", "Philippines", "China", "Hong Kong",
+             "Vietnam", "Pakistan", "Bangladesh", "Sri Lanka"],
+    "asia": ["India", "Singapore", "Japan", "Malaysia", "Philippines", "China", "Hong Kong", "Vietnam", "Pakistan",
+             "Bangladesh", "Sri Lanka", "United Arab Emirates", "Saudi Arabia", "Qatar", "Israel"],
+    "north america": ["United States", "Canada", "Mexico"], "americas": ["United States", "Canada", "Mexico", "Brazil"],
+    "latam": ["Mexico", "Brazil"], "latin america": ["Mexico", "Brazil"], "middle east": ["United Arab Emirates", "Saudi Arabia", "Qatar", "Israel"],
+}
+_ALIAS = {}
+for _name, (_i2, _i3, _words) in COUNTRIES.items():
+    for _w in _words + [_name.lower()]:
+        _ALIAS[_w] = _name
+_ALIAS_RE = re.compile(r"(?<![a-z])(" + "|".join(sorted(map(re.escape, _ALIAS), key=len, reverse=True)) + r")(?![a-z])")
+
+
+def country_name(text):
+    """'UK' / 'Bengaluru' / 'United States' -> canonical country name (or None)."""
+    t = (text or "").strip()
+    if not t:
+        return None
+    if _is_us(t) and not _ALIAS_RE.search(t.lower().replace("us", "")):
+        return "United States"
+    m = _ALIAS_RE.search(t.lower())
+    return _ALIAS[m.group(1)] if m else None
+
+
+def countries_in(raw):
+    """All countries a job location mentions: 'London, UK; Remote - US' -> {'United Kingdom', 'United States'}."""
+    found = {_ALIAS[m.group(1)] for m in _ALIAS_RE.finditer((raw or "").lower())}
+    if "United States" not in found and _is_us(raw or ""):
+        found.add("United States")
+    if "United States" in found and re.search(r"\bus\b", (raw or "").lower()) and len(found) > 1 \
+            and not re.search(r"\b(usa|united states|u\.s\.)\b", (raw or "").lower()) \
+            and not any(m in US_STATES for m in re.findall(r"(?:,|\s|-)\s*([A-Z]{2})\b", raw or "")):
+        found.discard("United States")                         # "us" inside another word list, e.g. "Remote (UK, us team)"
+    return found
+
+
 def locations_for(p):
-    """The profile's locations; if none are set, read the country from the resume."""
+    """The profile's locations; if none are set, read the country from the resume's contact line."""
     wanted = location_list(p)
     if wanted:
         return wanted
@@ -779,34 +910,46 @@ def locations_for(p):
     # the contact line (it has the phone or e-mail) says where the candidate lives; PDFs can put it anywhere
     contact = [ln for ln in text.splitlines() if "@" in ln or re.search(r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}", ln)]
     head = " ".join(contact[:3]) or text[:600]
-    if _is_us(head):
-        return ["United States", "Remote"]
-    if re.search(r"\bindia\b", head, re.I):
-        return ["India", "Remote"]
-    return []
+    c = country_name(head)
+    return [c, "Remote"] if c else []
+
+
+def target_countries(profiles):
+    """Countries the profiles want jobs in (US if none is known)."""
+    out = []
+    for p in profiles:
+        for w in locations_for(p):
+            c = country_name(w)
+            if c and c not in out:
+                out.append(c)
+    return out or ["United States"]
 
 
 def location_ok(job_location, wanted):
-    """wanted: e.g. ['United States', 'Remote'] (empty = anywhere).
-    For a US candidate a 'remote' job only counts if it is not tied to another country."""
+    """wanted: e.g. ['United Kingdom', 'Remote'] (empty = anywhere).
+    A 'remote' job only counts if it is not tied to a country (or region) the candidate didn't choose."""
     if not wanted:
         return True
     raw = job_location or ""
     loc = raw.lower()
-    wl = [w.lower() for w in wanted]
-    us = any(w in ("united states", "usa", "us", "u.s.") for w in wl)
+    wl = [w.strip().lower() for w in wanted if w.strip()]
+    remote = "remote" in wl
+    mine = {country_name(w) for w in wl if w != "remote"} - {None}
     if not loc.strip():
-        return "remote" in wl                       # no location given: only ok for remote seekers
-    if us and _is_us(raw):
+        return remote                                   # no location given: only ok for remote seekers
+    there = countries_in(raw)
+    if mine & there:
         return True
-    for w in wl:
-        if w == "remote":
-            if "remote" in loc or "anywhere" in loc or "worldwide" in loc:
-                if us and FOREIGN.search(loc) and not _is_us(raw):
-                    continue                        # "Berlin (Remote)", "Remote - EU"
-                return True
-        elif w not in ("united states", "usa", "us", "u.s.") and w in loc:
+    for w in wl:                                        # a city / state typed by hand, e.g. "Michigan", "Austin"
+        if w != "remote" and not country_name(w) and w in loc:
             return True
+    if remote and re.search(r"remote|anywhere|worldwide|work from home|wfh|distributed", loc):
+        if there - mine:
+            return False                                # "Berlin (Remote)" for someone in India
+        regions = [r for r in REGIONS if re.search(r"(?<![a-z])" + re.escape(r) + r"(?![a-z])", loc)]
+        if regions and mine and not any(set(REGIONS[r]) & mine for r in regions):
+            return False                                # "Remote - EMEA" for someone in the US
+        return True
     return False
 
 
@@ -901,6 +1044,9 @@ def _save_for_profiles(jobs, profiles, since, source, summary):
                 continue
             if job.get("jd") is None and job.get("_detail"):          # SmartRecruiters/Workday: JD only when needed
                 job["jd"] = DETAIL_READERS.get(job.get("_kind"), _smartrecruiters_jd)(job["_detail"])
+            if not exp_ok(job.get("jd"), p):                          # asks for more (or less) experience
+                _count(summary, source, "experience")
+                continue
             if not skills_ok(job, p):                                  # title fits, but skills don't
                 summary["low_match"] = summary.get("low_match", 0) + 1
                 _count(summary, source, "low skills match")
@@ -915,14 +1061,19 @@ def _save_for_profiles(jobs, profiles, since, source, summary):
             summary["by_profile"][p["name"]] = summary["by_profile"].get(p["name"], 0) + (key == "new")
 
 
-def run(progress=None):
-    """Collect from every active board and feed. Returns a summary dict."""
+def run(progress=None, auto=False):
+    """Collect from every active board and feed. Returns a summary dict.
+    auto=True (the every-N-hours run): looks back at least since the last run, and uses the
+    JSearch free quota (200 searches a month) only on the first run of the day."""
     if not _lock.acquire(blocking=False):
         return {"busy": True}
     try:
         init()
         prune_waiting()
-        since = datetime.now(timezone.utc) - timedelta(hours=window_hours())
+        hours = window_hours()
+        if auto:
+            hours = max(hours, collect_every() + 1)      # never miss jobs posted between two runs
+        since = datetime.now(timezone.utc) - timedelta(hours=hours)
         profiles = [p for p in db.profiles() if db.roles_for_search(p)]
         summary = {"started": db.now(), "found": 0, "new": 0, "duplicates": 0, "low_match": 0, "errors": [], "by_profile": {},
                    "no_roles": [p["name"] for p in db.profiles() if not db.roles_for_search(p)]}
@@ -935,6 +1086,8 @@ def run(progress=None):
             db.set_setting("suggested_version", "2")
         active = [b for b in boards() if b["active"]]
         feeds = [f for f in FEEDS if feed_ready(f)]
+        if auto and db.setting("last_collect_day") == db.today():
+            feeds = [f for f in feeds if f != "jsearch"]      # keep the free monthly quota
         summary["skipped_feeds"] = [FEEDS[f] for f in KEY_FEEDS if not feed_ready(f)]
         total = len(active) + len(feeds)
         step = 0
@@ -961,9 +1114,14 @@ def run(progress=None):
             time.sleep(PAUSE)
         terms = sorted({r for p in profiles for r in db.roles_for_search(p)[:4]})   # main roles only (be polite)
         big_terms = list(dict.fromkeys(r for p in profiles for r in db.roles_for_search(p)[:8]))  # top 8 roles, in order
-        feed_fetch = {"jooble": lambda: fetch_jooble(big_terms),
-                      "jsearch": lambda: fetch_jsearch(big_terms),
-                      "himalayas": lambda: fetch_himalayas(big_terms), "wwr": fetch_wwr,
+        countries = target_countries(profiles)
+        _COUNTRIES_NOW[:] = countries
+        each = lambda fn: [j for c in countries for j in fn(c)]          # run a feed once per country
+        feed_fetch = {"jooble": lambda: each(lambda c: fetch_jooble(big_terms, location=c)),
+                      "jsearch": lambda: each(lambda c: fetch_jsearch(big_terms, country=COUNTRIES[c][0],
+                                                                                where="USA" if c == "United States" else c)),
+                      "himalayas": lambda: each(lambda c: fetch_himalayas(big_terms, country=COUNTRIES[c][0].upper())),
+                      "wwr": fetch_wwr,
                       "remotive": lambda: fetch_remotive(terms), "themuse": fetch_themuse,
                       "arbeitnow": fetch_arbeitnow, "remoteok": fetch_remoteok, "jobicy": fetch_jobicy}
         for f in feeds:
@@ -984,6 +1142,7 @@ def run(progress=None):
         summary["finished"] = db.now()
         db.set_setting("last_collect", json.dumps(summary))
         db.set_setting("last_collect_day", db.today())
+        db.set_setting("last_collect_at", datetime.now().isoformat(timespec="seconds"))
         return summary
     finally:
         _lock.release()
@@ -996,20 +1155,41 @@ def last_summary():
         return None
 
 
-# ---------------------------------------------------------------- every day, automatically
+# ---------------------------------------------------------------- every few hours, automatically
+EVERY_CHOICES = [1, 2, 3, 4, 6, 8, 12, 24]
+
+
+def collect_every():
+    """Hours between automatic collections (default 3)."""
+    try:
+        return max(1, int(float(db.setting("collect_every_hours", "3") or 3)))
+    except ValueError:
+        return 3
+
+
+def next_collect():
+    """When the next automatic collection runs (datetime), or None if it is off."""
+    if db.setting("collect_auto", "1") != "1":
+        return None
+    last = db.setting("last_collect_at")
+    try:
+        return datetime.fromisoformat(last) + timedelta(hours=collect_every()) if last else datetime.now()
+    except ValueError:
+        return datetime.now()
+
+
 def _daily_loop():
     while True:
         try:
-            if db.setting("collect_auto", "1") == "1":
-                hour = int(db.setting("collect_hour", "7") or 7)
-                if db.setting("last_collect_day") != db.today() and datetime.now().hour >= hour:
-                    run()
+            nxt = next_collect()
+            if nxt and datetime.now() >= nxt:
+                run(auto=True)
         except Exception:
             pass
-        time.sleep(600)  # check every 10 minutes
+        time.sleep(300)  # check every 5 minutes
 
 
 def start_daily():
-    """While the app is open, collects once a day (after the chosen hour)."""
+    """While the app is open, collects every few hours (Collection settings, default every 3 hours)."""
     init()
     threading.Thread(target=_daily_loop, daemon=True, name="jobpilot-daily").start()

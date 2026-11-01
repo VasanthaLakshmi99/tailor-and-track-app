@@ -6,7 +6,9 @@ A free job-search helper that runs on your own laptop. It:
 - **blocks duplicates**, so you never apply to the same job twice
 - shows a **match %** for every job against your resume
 - **tailors your resume** for each job automatically (PDF, in your master resume's layout)
-- **tracks applications** and makes monthly or yearly **Excel reports**
+- **checks the ATS score** of every resume against the JD (hard skills, job title, soft skills, experience, education, format)
+- **tracks applications** and makes **Excel reports** for any dates you pick
+- **fills application forms** (name, email, phone, LinkedIn, work authorization, resume upload…) with the J button. You check and submit.
 
 Your data (resumes, applications) stays **on your own computer**. Nothing is uploaded anywhere.
 
@@ -47,9 +49,17 @@ The app must be running for the J button to work.
 
 1. **Profiles:** set your name, then upload your **master resume** (PDF or DOCX). Target roles and locations are read from the resume automatically, and you can change them.
 2. **Profiles → 📁 Where tailored resumes are saved:** choose a folder. A Google Drive or OneDrive folder saves laptop space.
-3. **Find jobs:** pick **Date posted** and click **Collect now**. Also save jobs with the **J button**.
-4. **Tailor resumes:** click **⚡ Auto-tailor**. Only tick JD skills you have really used.
-5. **Apply & track:** open each job, apply, and tick **Applied ✓**. Download the Excel report at the bottom.
+3. **Find jobs:** pick **Date posted** (30 min … past month, or Custom) and the **🎓 Experience** range, then click **Collect now**.
+   While the app is open it also collects new jobs **every 3 hours** by itself (change it in ⚙️ Collection settings).
+   Jobs come from the countries in the resume / profile locations (US, India, UK, Canada, Germany, UAE and more).
+4. **Tailor resumes:** click **⚡ Auto-tailor**. Only tick JD skills you have really used. **📊 ATS check** on each card shows the score and what to fix.
+5. **Profiles → ✍️ Application form answers:** save them once. On an application page click **J → ✍️ Fill application form**.
+6. **Apply & track:** open each job, apply, and tick **Applied ✓**. Download the Excel report at the bottom (pick **Custom dates…** for any period).
+   **🧹 Duplicate jobs** at the bottom removes jobs saved twice.
+
+### Keep the laptop fast
+- **Profiles → 📁 Where tailored resumes are saved:** use a Google Drive / OneDrive folder with "Stream files" / "Files On-Demand".
+- **Profiles → 🧹 Free up space:** deletes tailored PDFs of jobs you did not apply to (applied ones are kept).
 
 ### Optional free keys (more US jobs)
 In **Find jobs → ⚙️ Collection settings** you can add:

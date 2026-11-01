@@ -6,7 +6,7 @@ Back it up by copying that file.
 Every job belongs to a PROFILE (one candidate). Duplicates are checked per
 profile, so applying for candidate A never blocks candidate B.
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import difflib
 import io
 import json
@@ -104,6 +104,9 @@ def init_db():
                 con.execute("UPDATE jobs SET company_norm=?, title_norm=? WHERE id=?",
                             (norm_company(r["company"]), norm_title(r["title"]), r["id"]))
             con.execute("INSERT OR REPLACE INTO settings VALUES('norm_version', '2')")
+        for col, kind in (("ats_after", "INTEGER"), ("ats_json", "TEXT")):   # ATS check of the tailored resume
+            if col not in _columns(con, "jobs"):
+                con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
         if "origin" not in _columns(con, "jobs"):                 # 'collect' | 'j' | 'import' | 'manual'
             con.execute("ALTER TABLE jobs ADD COLUMN origin TEXT")
         for col in ("tailor_status", "tailor_note"):          # automatic tailoring (step 2)
@@ -593,6 +596,158 @@ def delete_jobs(job_ids):
     """Delete saved jobs that were NOT applied (applied jobs are kept for reports)."""
     with connect() as con:
         con.executemany("DELETE FROM jobs WHERE id=? AND status!='applied'", [(i,) for i in job_ids])
+
+
+# ---------------------------------------------------------------- application form autofill (J button)
+APPLY_FIELDS = [   # (key, label, help)
+    ("first_name", "First name", ""), ("last_name", "Last name", ""),
+    ("email", "Email", ""), ("phone", "Phone", "e.g. +1 734 555 0100"),
+    ("linkedin", "LinkedIn URL", ""), ("github", "GitHub URL", ""), ("website", "Portfolio / website", ""),
+    ("city", "City", ""), ("state", "State / province", ""), ("zip", "ZIP / postal code", ""),
+    ("country", "Country", ""), ("address", "Street address", "optional"),
+    ("current_company", "Current company", ""), ("current_title", "Current job title", ""),
+    ("years", "Years of experience", "e.g. 4"),
+    ("work_auth", "Authorized to work in this country?", "Yes / No"),
+    ("sponsorship", "Need visa sponsorship now or in future?", "Yes / No"),
+    ("relocate", "Willing to relocate?", "Yes / No"),
+    ("salary", "Expected salary", "e.g. 120000"), ("notice", "Notice period / start date", "e.g. 2 weeks"),
+    ("visa", "Visa status", "e.g. H-1B, GC, Citizen, OPT"),
+]
+
+
+def _guess_contact(p):
+    """Fill what the master resume already says (email, phone, LinkedIn, GitHub, name, years)."""
+    text = (p or {}).get("text") or ""
+    g = {}
+    m = re.search(r"[\w.+-]+@[\w-]+\.[\w.]+", text)
+    if m:
+        g["email"] = m.group(0).rstrip(".")
+    m = re.search(r"(\+?\d[\d\s().-]{8,}\d)", text[:1500])
+    if m:
+        g["phone"] = re.sub(r"\s+", " ", m.group(1)).strip()
+    for key, host in (("linkedin", "linkedin.com"), ("github", "github.com")):
+        m = re.search(r"(?:https?://)?(?:www\.)?" + re.escape(host) + r"/[\w\-/%.]+", text, re.I)
+        if m:
+            g[key] = m.group(0) if m.group(0).startswith("http") else "https://" + m.group(0)
+    parts = ((p or {}).get("name") or "").split()
+    if parts:
+        g["first_name"], g["last_name"] = parts[0], " ".join(parts[1:])
+    years = matching.years_of_experience(text)
+    if years:
+        g["years"] = str(years)
+    return g
+
+
+def apply_info(pid):
+    """The candidate's answers for application forms: saved values, else guesses from the resume."""
+    p = profile(pid)
+    try:
+        saved = json.loads(setting(f"apply_info_{pid}") or "{}")
+    except ValueError:
+        saved = {}
+    info = _guess_contact(p)
+    info.update({k: v for k, v in saved.items() if str(v).strip()})
+    if info.get("first_name") or info.get("last_name"):
+        info["full_name"] = f"{info.get('first_name', '')} {info.get('last_name', '')}".strip()
+    if info.get("city"):
+        info["location"] = ", ".join(x for x in (info.get("city"), info.get("state"), info.get("country")) if x)
+    return info
+
+
+def set_apply_info(pid, values):
+    set_setting(f"apply_info_{pid}", json.dumps({k: (v or "").strip() for k, v in values.items()}))
+
+
+def resume_for_form(pid, company, title, url):
+    """(file name, bytes) to attach to an application: the tailored PDF for this job, else the master resume."""
+    with connect() as con:
+        key = job_key(url, company) if url else ""
+        row = con.execute("SELECT * FROM jobs WHERE profile_id=? AND job_key=?", (pid, key)).fetchone() if key else None
+        if not row and company and title:
+            row = con.execute("SELECT * FROM jobs WHERE profile_id=? AND company_norm=? AND title_norm=?",
+                              (pid, norm_company(company), norm_title(title))).fetchone()
+    if row and row["resume_file"] and Path(row["resume_file"]).exists():
+        f = Path(row["resume_file"])
+        return f.name, f.read_bytes(), "tailored"
+    p = profile(pid)
+    if p and p.get("data"):
+        return p.get("filename") or "resume.pdf", p["data"], "master"
+    return None, None, None
+
+
+def duplicate_groups(pid):
+    """Groups of rows that are the same job saved more than once: same company + same role title
+    (after cleaning "(Remote)", "Job# 123", "Sr." etc.). The first row of each group is the one to keep:
+    applied first (earliest applied), then the one with a tailored resume, then a JD, then the oldest."""
+    with connect() as con:
+        rows = [dict(r) for r in con.execute(
+            "SELECT * FROM jobs WHERE profile_id=? AND status!='hidden'", (pid,))]
+    groups = {}
+    for r in rows:
+        k = (r["company_norm"] or norm_company(r["company"]), r["title_norm"] or norm_title(r["title"]))
+        if k[0] and k[1]:
+            groups.setdefault(k, []).append(r)
+    rank = lambda r: (r["status"] != "applied", r["applied_at"] or "9", not r["resume_file"],
+                      not (r["jd"] or "").strip(), r["saved_at"] or "9", r["id"])
+    out = [sorted(g, key=rank) for g in groups.values() if len(g) > 1]
+    out.sort(key=lambda g: (g[0]["company"] or "").lower())
+    return out
+
+
+def remove_duplicates(pid, keep_ids=None):
+    """Delete the extra copies found by duplicate_groups (applied copies too, because the same job
+    counted twice spoils the reports). Keeps the first row of each group, or the ids in keep_ids.
+    A deleted copy's 'applied' date moves to the kept row if the kept row was not marked applied.
+    Returns how many rows were deleted."""
+    gone = 0
+    with connect() as con:
+        for g in duplicate_groups(pid):
+            keep = next((r for r in g if keep_ids and r["id"] in keep_ids), g[0])
+            extras = [r for r in g if r["id"] != keep["id"]]
+            applied = sorted(r["applied_at"] for r in g if r["status"] == "applied" and r["applied_at"])
+            if applied and keep["status"] != "applied":
+                con.execute("UPDATE jobs SET status='applied', applied_at=? WHERE id=?", (applied[0], keep["id"]))
+            for r in extras:
+                if not keep["resume_file"] and r["resume_file"]:
+                    con.execute("UPDATE jobs SET resume_file=?, tailored_match=? WHERE id=?",
+                                (r["resume_file"], r["tailored_match"], keep["id"]))
+                    keep["resume_file"] = r["resume_file"]
+                if not (keep["jd"] or "").strip() and (r["jd"] or "").strip():
+                    con.execute("UPDATE jobs SET jd=? WHERE id=?", (r["jd"], keep["id"]))
+                    keep["jd"] = r["jd"]
+                con.execute("DELETE FROM jobs WHERE id=?", (r["id"],))
+                gone += 1
+    return gone
+
+
+def old_resumes(pid, days):
+    """Tailored resume files of jobs that were NOT applied and were saved more than `days` days ago."""
+    cut = str((datetime.now() - timedelta(days=days)).date())
+    with connect() as con:
+        return [dict(r) for r in con.execute(
+            "SELECT id, resume_file FROM jobs WHERE profile_id=? AND status!='applied' AND resume_file IS NOT NULL "
+            "AND resume_file!='' AND substr(saved_at,1,10) < ?", (pid, cut))]
+
+
+def clean_resumes(pid, days):
+    """Delete those files from the disk (the jobs stay, so they can be tailored again). Returns (files, MB)."""
+    n, size = 0, 0
+    with connect() as con:
+        for r in old_resumes(pid, days):
+            f = Path(r["resume_file"])
+            if f.exists():
+                size += f.stat().st_size
+                f.unlink()
+                n += 1
+            con.execute("UPDATE jobs SET resume_file=NULL, tailored_match=NULL, ats_after=NULL, ats_json=NULL, "
+                        "tailor_status=NULL WHERE id=?", (r["id"],))
+    return n, round(size / 1e6, 1)
+
+
+def disk_use():
+    """(number of files, MB) in the tailored resumes folder."""
+    files = [f for f in Path(resume_dir()).rglob("*") if f.is_file()]
+    return len(files), round(sum(f.stat().st_size for f in files) / 1e6, 1)
 
 
 # ---------------------------------------------------------------- reading

@@ -10,7 +10,7 @@ For one job it builds a new resume PDF from the master resume:
   - education, certifications and everything else kept as they are
 It never adds a skill that is not in the resume or ticked by you.
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import re
 from pathlib import Path
 
@@ -156,9 +156,9 @@ def jd_terms(jd, resume_text):
 
 
 def gaps(job, resume_text):
-    """JD skills the resume doesn't show (what the user may tick)."""
-    have = matching.find_skills(resume_text, extra=matching.learn_skills(resume_text))
-    return [spelled for skill, spelled in jd_terms(job.get("jd") or "", resume_text) if skill not in have]
+    """JD keywords (hard skills first, then soft skills) the resume doesn't show: what the user may tick."""
+    return [disp for disp, key, w, kind in matching.jd_keywords(job.get("jd") or "", resume_text, job.get("company") or "")
+            if not matching.has_keyword(resume_text, disp, key)]
 
 
 # ---------------------------------------------------------------- tailor
@@ -173,6 +173,25 @@ USE_LINES = {   # how a ticked skill is shown in the work experience
                    "Used {skills} to package, deploy and run applications on containers and Kubernetes."),
     "cloud": (r"azure|gcp|google cloud|oracle cloud|oci",
               "Worked with {skills} for cloud infrastructure and deployments."),
+    "observability": (r"monitoring|observability|logging|alerting|cloudwatch|tracing",
+                      "Drove {skills} for production services, building dashboards and alerts that catch issues early."),
+    "iac": (r"terraform|cloudformation|pulumi|infrastructure as code|bicep|crossplane",
+            "Managed cloud resources with {skills}, keeping every change version-controlled and reproducible."),
+    "testing": (r"test|selenium|jmeter|cypress|pytest|junit|qa\b|quality",
+                "Applied {skills} in release validation to catch defects before production."),
+    "network_os": (r"network|dns|tcp|firewall|vpn|load balanc|unix|linux|windows server|bash|shell",
+                   "Worked with {skills} while operating and troubleshooting servers and services."),
+    "languages": (r"python|java\b|golang|\bgo\b|javascript|typescript|ruby|groovy|powershell|scala|c#|\.net|sql",
+                  "Wrote {skills} code and scripts to automate builds, deployments and routine operations."),
+    "process": (r"incident|change management|release management|root cause|on-call|on call|postmortem|runbook|"
+                r"agile|scrum|sdlc|itil|servicenow|jira|sla|slo|compliance|security",
+                "Followed {skills} practices with development, QA and operations teams."),
+    "cloud_svc": (r"aws|amazon|ec2|s3|lambda|eks|ecs|rds|iam|vpc|cloud",
+                  "Used {skills} to build and run cloud infrastructure."),
+    "containers2": (r"kubernetes|k8s|docker|container|microservice",
+                    "Ran {skills} workloads in production, from build to rollout."),
+    "cicd2": (r"jenkins|ci/cd|ci cd|continuous|pipeline|codepipeline|maven|gradle|git\b|github|bitbucket",
+              "Built and maintained {skills} workflows for frequent, reliable releases."),
     "other": (r"$^", "Worked hands-on with {skills} in day-to-day {title} work."),
 }
 
@@ -234,50 +253,99 @@ def _join(items):
     return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
 
 
-def tailor(job, resume_text, confirmed=()):
-    """Return the tailored resume as a dict (same shape as parse())."""
-    r = parse(resume_text)
-    full_text = resume_text + "\n" + "\n".join(confirmed)
-    terms = jd_terms(job.get("jd") or "", full_text)
-    have_skills = matching.find_skills(full_text, extra=list(matching.learn_skills(resume_text)) + list(confirmed))
-    have = [(s, sp) for s, sp in terms if s in have_skills or any(sp.lower() == c.lower() for c in confirmed)]
-    in_resume = matching.find_skills(resume_text, extra=matching.learn_skills(resume_text))
-    added = [sp for s, sp in have if s not in in_resume]          # ticked by the user, not written in the resume
-    # headline: the target role the job fits (no "Senior"/"Lead" the resume can't back up)
-    roles = matching.roles_from_resume(resume_text)
-    title = matching.title_fit(job.get("title") or "", roles) or (roles[0] if roles else "") or \
-        re.sub(r"\s*[\(\[|].*$", "", job.get("title") or "").strip()
+LEAD_WORDS = re.compile(r"\b(lead|principal|staff|head|director|manager|chief|architect|vp)\b", re.I)
+SENIOR_WORDS = re.compile(r"\b(senior|sr\.?)\s+", re.I)
 
-    # summary: new first sentence, rest of the master summary kept
+
+def summary_title(job_title, resume_text):
+    """The JD's job title for the summary (ATS tools look for it), without a level the resume can't back up."""
+    t = re.sub(r"\s*[\(\[|].*$", "", job_title or "").strip()
+    t = re.split(r"\s+[-–—/]\s+|,", t)[0].strip()                    # "Lead Software Engineer - Cloud, AWS" -> first part
+    years = matching.years_of_experience(resume_text) or 0
+    if years < 8:
+        t = LEAD_WORDS.sub("", t)
+    if years < 5:
+        t = SENIOR_WORDS.sub("", t)
+    t = re.sub(r"\b(i{1,3}|iv|[1-4])$", "", re.sub(r"\s+", " ", t)).strip(" -,")
+    return t or None
+
+
+def tailor(job, resume_text, confirmed=()):
+    """Return the tailored resume as a dict (same shape as parse()).
+
+    What an ATS checks, and what this does about it:
+      - hard skills: every JD keyword the candidate has is in Skills, spelled as in the JD, AND in a work bullet
+        (keywords the JD repeats should appear more than once)
+      - job title: the JD's title (without a level the resume can't back up) opens the summary
+      - soft skills: the ones you tick are added to the summary
+      - relevance: the bullets that use the JD's keywords come first
+    Only skills in the resume or ticked by you are used."""
+    r = parse(resume_text)
+    confirmed = [c for c in confirmed if c]
+    full_text = resume_text + "\n" + "\n".join(confirmed)
+    kws = matching.jd_keywords(job.get("jd") or "", resume_text, job.get("company") or "")
+    ticked = {c.lower() for c in confirmed}
+    is_have = lambda d, k: matching.has_keyword(full_text, d, k) or d.lower() in ticked or k in ticked
+    hard = [(d, k, w) for d, k, w, kind in kws if kind == "hard" and is_have(d, k)]
+    soft = [(d, k, w) for d, k, w, kind in kws if kind == "soft" and is_have(d, k)]
+    in_resume = lambda d, k: matching.has_keyword(resume_text, d, k)
+    added = [d for d, k, w in hard if not in_resume(d, k)]                    # ticked by the user, not in the resume
+
+    roles = matching.roles_from_resume(resume_text)
+    fit = matching.title_fit(job.get("title") or "", roles) or (roles[0] if roles else "")
+    title = summary_title(job.get("title") or "", resume_text) or fit or "Engineer"
+
+    # 1. summary: JD title + top JD keywords first, rest of the master summary kept, ticked soft skills at the end
     years = matching.years_of_experience(resume_text)
-    top = ([sp for s, sp in have if s in in_resume] + [sp for s, sp in have if s not in in_resume])[:6]
+    top = ([d for d, k, w in hard if in_resume(d, k)] + added)[:6]
     first = f"{title} with {years}+ years of hands-on experience in {_join(top)}." if top and years else \
         (f"{title} experienced in {_join(top)}." if top else "")
     rest = re.split(r"(?<=[.!?])\s+", r["summary"], maxsplit=1)
-    r["summary"] = (first + " " + (rest[1] if len(rest) > 1 else "")).strip() if first else r["summary"]
+    summary = (first + " " + (rest[1] if len(rest) > 1 else "")).strip() if first else r["summary"]
+    soft_new = [d for d, k, w in soft if not matching.has_keyword(summary + resume_text, d, k)]
+    if soft_new:
+        summary += f" Brings strong {_join(soft_new)} skills."
+    r["summary"] = summary
 
-    # experience: most relevant bullets first; ticked skills added to the most recent job
-    want = [matching._pattern(sp) for _, sp in have] + [p for s, _ in have for p in matching._PATTERNS.get(s, [])]
+    # 2. bullets: the ones using the JD's keywords first; JD spelling added next to the resume's own word
+    pats = {d: [matching._pattern(d), matching._pattern(k)] + [matching._pattern(a) for n, al in matching.SKILLS.items()
+                                                             if n.lower() == k for a in [n] + al] for d, k, w in hard}
+    weight = {d: w for d, k, w in hard}
 
     def hits(b):
         low = b.lower()
-        return sum(1 for p in want if p.search(low))
+        return sum(weight[d] for d, ps in pats.items() if any(p.search(low) for p in ps))
 
-    for i, jb in enumerate(r["experience"]):
+    for jb in r["experience"]:
         jb["bullets"] = sorted(jb["bullets"], key=hits, reverse=True)
-    if added and r["experience"]:
-        new_bullets, left = [], list(added)
+    all_bullets = lambda: " ".join(b for jb in r["experience"] for b in jb["bullets"])
+    for d, k, w in hard:                                                       # "Kubernetes" -> "Kubernetes (K8s)"
+        if matching._pattern(d).search(all_bullets().lower()) or matching._pattern(d).search(resume_text.lower()):
+            continue
+        done = False
+        for jb in r["experience"]:
+            for i, b in enumerate(jb["bullets"]):
+                for p in pats[d][1:]:
+                    m = p.search(b.lower())
+                    if m and not done:
+                        jb["bullets"][i] = b[:m.end()] + f" ({d})" + b[m.end():]
+                        done = True
+
+    # 3. keywords that are only in Skills (or ticked) also go into the latest job, once, in plain sentences
+    in_bullets = lambda d: any(p.search(all_bullets().lower()) for p in pats[d])
+    need_line = [d for d, k, w in hard if d in added or (not in_bullets(d) and w >= 1)]
+    if need_line and r["experience"]:
+        new_bullets, left = [], list(dict.fromkeys(need_line))
         for kind, (pattern, sentence) in USE_LINES.items():
-            group = left if kind == "other" else [sp for sp in left if re.search(pattern, sp, re.I)]
+            group = left if kind == "other" else [x for x in left if re.search(pattern, x, re.I)]
             if group:
-                new_bullets.append(sentence.format(skills=_join(group), title=title))
-                left = [sp for sp in left if sp not in group]
+                new_bullets.append(sentence.format(skills=_join(group), title=fit or title))
+                left = [x for x in left if x not in group]
         r["experience"][0]["bullets"][1:1] = new_bullets      # right under the strongest bullet of the latest job
 
-    # skills: same categories as the master. JD keywords move to the front of their category, written the
-    # way the JD writes them; JD keywords not written anywhere yet are added to the category they belong to.
-    r["skills"] = _skills_for_jd(r["skills"], [sp for _, sp in have])
-    r["added"] = r_added(have, in_resume)
+    # 4. skills: the master's categories, JD keywords first and spelled the JD's way, missing ones added
+    r["skills"] = _skills_for_jd(r["skills"], [d for d, k, w in hard])
+    r["added"] = added
     return r
 
 

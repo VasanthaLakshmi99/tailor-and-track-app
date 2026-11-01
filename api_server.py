@@ -4,7 +4,7 @@ Listens only on 127.0.0.1:8765 (your own laptop). The extension sends the job
 it read from the page; this file checks duplicates and saves it with db.py.
 app.py starts it automatically - you never run this file yourself.
 """
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -108,6 +108,12 @@ class Handler(BaseHTTPRequestHandler):
             out.update(m)
             out["has_resume"] = bool(db.resume_text(pid))
             return self._send(200, out)
+
+        if self.path == "/apply_info":      # J box "Fill application form"
+            import base64
+            name, data_, kind = db.resume_for_form(pid, company, title, url)
+            return self._send(200, {"info": db.apply_info(pid), "resume_name": name, "resume_kind": kind,
+                                    "resume_b64": base64.b64encode(data_).decode() if data_ else None})
 
         if self.path == "/save":
             res = db.save_job(pid, company, title, url, jd, data.get("location", ""), data.get("source", ""), origin="j")

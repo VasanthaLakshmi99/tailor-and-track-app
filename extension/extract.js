@@ -103,7 +103,7 @@
   };
 
   // ---------------------------------------------------------------- search pages (list left, details right)
-  const SEARCHY = /(^\d[\d,]*\+?\s.*\bjobs?\b|\bjobs?\s+in\b|^search\b|^jobs?$|jobs? near|^careers?$|^job search$|^open positions$|^current openings$)/i;
+  const SEARCHY = /(^\d[\d,]*\+?\s.*\bjobs?\b|\bjobs?\s+in\b|^search\b|^jobs?$|jobs? near|^careers?$|^job search$|^open positions$|^current openings$|^job (post )?details$|^job description$|^full job description$|^job posting$|^apply now$)/i;
   const jdHeading = () => [...document.querySelectorAll("h1,h2,h3,h4,strong,b,span,div,p")]
     .find((h) => { const t = clean(h.textContent); return t.length <= 40 && JD_HEAD.test(t.replace(/:$/, "")); }) || null;
   // a link to ONE job looks like this; a search page link does not
@@ -304,9 +304,17 @@
       loc: ['[data-cy="location"]', 'li[data-cy="location"]'], jd: ['[data-testid="jobDescriptionHtml"]', "#jobDescription", '[data-cy="jobDescription"]'] },
     { m: /ziprecruiter\./, title: ["h1.job_title"], company: [".hiring_company_text", ".hiring_company a", "a.hiring_company", '[data-testid="job-card-company"]'],
       loc: [".location_text", ".hiring_location"], jd: [".job_description", ".jobDescriptionSection", '[class*="job_description"]'] },
-    { m: /indeed\./, title: ['h1[data-testid="jobsearch-JobInfoHeader-title"]', '[data-testid="jobsearch-JobInfoHeader-title"]', "h1"],
-      company: ['[data-testid="inlineHeader-companyName"]', '[data-company-name="true"]'],
-      loc: ['[data-testid="inlineHeader-companyLocation"]', '[data-testid="job-location"]'], jd: ["#jobDescriptionText"] },
+    { m: /indeed\./, title: ['[data-testid="jobsearch-JobInfoHeader-title"]', '[data-testid="simpler-jobTitle"]',
+                             "h2.jobsearch-JobInfoHeader-title", ".jobsearch-JobInfoHeader-title", '[class*="JobInfoHeader-title"]'],
+      company: ['[data-testid="inlineHeader-companyName"] a', '[data-testid="inlineHeader-companyName"]', '[data-company-name="true"]',
+                '[data-testid="simpler-companyName"]', '[data-testid="jobsearch-CompanyInfoContainer"] a', '.jobsearch-CompanyInfoContainer a'],
+      loc: ['[data-testid="inlineHeader-companyLocation"]', '[data-testid="jobsearch-JobInfoHeader-companyLocation"]',
+            '[data-testid="job-location"]', '[data-testid="simpler-companyLocation"]', "#jobLocationText"],
+      jd: ["#jobDescriptionText", '[data-testid="jobsearch-JobComponent-description"]'] },
+    { m: /oraclecloud\./, title: ['[class*="job-details__title"]', "h1"], company: [],
+      loc: ['[class*="job-details__subtitle"]', '[class*="job-meta__location"]'], jd: ['[class*="job-details__description-content"]', '[class*="job-details__description"]'] },
+    { m: /successfactors\.|jobs\.sap\./, title: ['[data-careersite-propertyid="title"]', "h1"], company: [],
+      loc: ['[data-careersite-propertyid="city"]', '[data-careersite-propertyid="location"]'], jd: ['[data-careersite-propertyid="description"]', ".jobdescription"] },
     { m: /glassdoor\./, title: ['[data-test="job-title"]', '[data-test="jobTitle"]', '[class*="JobDetails_jobTitle"]'],
       company: ['[data-test="employer-name"]', '[data-test="employerName"]', '[class*="EmployerProfile_employerName"]'],
       loc: ['[data-test="location"]', '[class*="JobDetails_location"]'], jd: ['[class*="JobDetails_jobDescription"]', ".jobDescriptionContent", '[data-test="jobDescriptionContent"]'] },
@@ -338,6 +346,21 @@
     { m: /wellfound\./, title: ["h1"], company: ['a[href*="/company/"]'], loc: [], jd: ['[class*="description"]'] },
   ];
 
+  if (host.includes("indeed.")) {
+    // search page (indeed.com/jobs?q=...&vjk=ID): the job on the right is the card with data-jk=ID
+    const jk = new URLSearchParams(location.search).get("vjk") || new URLSearchParams(location.search).get("jk");
+    if (jk) {
+      out.url = `${location.origin}/viewjob?jk=${jk}`;
+      const a = document.querySelector(`a[data-jk="${jk}"], [data-jk="${jk}"] a, a[id="job_${jk}"]`);
+      const card = a && (a.closest(".job_seen_beacon, .cardOutline, li, td.resultContent") || a.parentElement);
+      if (a) fill("title", clean(a.getAttribute("aria-label") ? (a.querySelector("span[title]") || a).textContent : a.textContent));
+      if (card) {
+        const q = (sel) => { const e = card.querySelector(sel); return e ? clean(e.innerText || e.textContent) : ""; };
+        fill("company", q('[data-testid="company-name"]') || q(".companyName"));
+        fill("location", q('[data-testid="text-location"]') || q(".companyLocation"));
+      }
+    }
+  }
   if (host.includes("linkedin.")) {
     // search page shows the job on the right side: build the clean job link
     const id = new URLSearchParams(location.search).get("currentJobId") || (path.match(/\/jobs\/view\/(?:[^/]*-)?(\d+)/) || [])[1];
@@ -389,6 +412,8 @@
   fill("location", locationLine(out.company));
   fill("location", locationFromLines(detailLines(out.title)));
   out.location = out.location.split("\n")[0].replace(/^(job\s+)?location\s*:?\s*/i, "");
+  if (out.title && out.location && (out.location === out.title || out.location.includes(out.title))) out.location = "";
+
 
   // 4. on a search page the address bar is the SEARCH, not the job: find the job's own link
   const SEARCH_URL = /(search|srch|\/jobs\/?$|[?&](q|keywords|search|query|k)=|\/q-)/i;

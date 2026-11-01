@@ -1,5 +1,5 @@
 """Excel report (and ZIP of resumes) for a candidate, for any period."""
-VERSION = "2026-10-30a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
 import io
 import zipfile
 from datetime import datetime, timedelta
@@ -9,13 +9,17 @@ import pandas as pd
 
 import db
 
-PERIODS = ["Today", "This week", "This month", "Last month", "This year", "All time"]
+PERIODS = ["Today", "This week", "This month", "Last month", "This year", "All time", "Custom dates…"]
 COLUMNS = ["Company Name", "Apply Link", "Role Title", "JD", "Status", "Applied Date", "Source", "Location",
            "Match %", "Resume File", "Saved Date", "Candidate"]
 
 
 def period_range(period):
-    """(start, end) as 'YYYY-MM-DD' strings, end exclusive; None = no limit."""
+    """(start, end) as 'YYYY-MM-DD' strings, end exclusive; None = no limit.
+    period is a name from PERIODS or a (from_date, to_date) pair, both days included."""
+    if isinstance(period, (tuple, list)):
+        a, b = period
+        return str(a), str(b + timedelta(days=1))
     today = datetime.now().date()
     if period == "Today":
         return str(today), str(today + timedelta(days=1))
@@ -85,7 +89,7 @@ def excel(pid, period, applied_only=True):
         ws.auto_filter.ref = ws.dimensions
         summary = xw.book.create_sheet("Summary")
         summary.append(["Candidate", data[0]["Candidate"] if data else ""])
-        summary.append(["Period", period])
+        summary.append(["Period", period_name(period)])
         summary.append(["Applications", sum(1 for r in data if r["Status"] == "Applied")])
         summary.append(["Created", db.now()])
     return buf.getvalue(), len(data)
@@ -103,8 +107,14 @@ def resumes_zip(pid, period):
     return buf.getvalue(), n
 
 
+def period_name(period):
+    if isinstance(period, (tuple, list)):
+        return f"{period[0]} to {period[1]}"
+    return period
+
+
 def file_label(pid, period):
     p = db.profile(pid)
     import re
     who = re.sub(r"[^A-Za-z0-9]+", "_", p["name"] if p else "profile").strip("_")
-    return f"TailorTrack_{who}_{period.replace(' ', '_')}_{db.today()}"
+    return f"TailorTrack_{who}_{period_name(period).replace(' ', '_')}_{db.today()}"
