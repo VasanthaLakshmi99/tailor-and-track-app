@@ -17,7 +17,7 @@ import autotailor
 st.set_page_config(page_title="Tailor&Track", page_icon="🧵", layout="wide")
 
 # ---------------------------------------------------------------- are all files from the same update?
-VERSION = "2026-11-01a"
+VERSION = "2026-11-01c"
 _old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor)
         if getattr(m, "VERSION", None) != VERSION]
 if _old:
@@ -188,6 +188,39 @@ def collection_hints(last):
                     "Try again later in the day, or add more companies in ⚙️ Collection settings.")
     for t in tips:
         st.info(t)
+    few_jobs_help(last)
+
+
+def few_jobs_help(last):
+    """Where the jobs went in the last run, with one-click fixes for the filters that dropped the most."""
+    if not last or not last.get("by_source"):
+        return
+    tot = {}
+    for v in last["by_source"].values():
+        for k, n in v.items():
+            tot[k] = tot.get(k, 0) + n
+    found, saved = tot.get("posted recently", 0), tot.get("saved", 0)
+    if not found or saved >= 50:
+        return
+    with st.expander(f"📉 Why only {saved} new job(s)? {found} jobs were posted in the {_window_text()}"):
+        rows = [(k, tot.get(k, 0)) for k in ("not a resume role", "wrong level", "wrong location", "experience",
+                                              "low skills match", "already in Tailor&Track", "duplicate blocked")]
+        st.dataframe(pd.DataFrame([r for r in rows if r[1]], columns=["Skipped because", "Jobs"]), hide_index=True)
+        c1, c2, c3 = st.columns(3)
+        hours = collectors.window_hours()
+        if hours < 72 and c1.button(f"⏱ Look back further (now {_window_text()})", width="stretch"):
+            db.set_setting("window_hours", str(24 if hours < 24 else 72))
+            collect_now(); st.rerun()
+        lo, hi = collectors.exp_range(P)
+        if tot.get("experience") and c2.button(f"🎓 Allow up to {hi + 3:g} years (now {hi:g})", width="stretch"):
+            db.set_setting(f"exp_max_{PID}", str(hi + 3))
+            collect_now(); st.rerun()
+        if tot.get("not a resume role") and c3.button("🎯 Add more target roles", width="stretch"):
+            st.info("Go to 👤 Profiles and add roles like Cloud Engineer, SRE, Platform Engineer, Build & Release Engineer, "
+                    "AWS Engineer, Kubernetes Engineer, Infrastructure Engineer.")
+        st.caption("Most jobs are posted on LinkedIn and Indeed, which can't be collected for free without breaking their "
+                   "rules. Search there with **Past 24 hours** and use the **J button**: it shows the match %, "
+                   "duplicates and the experience check on every job.")
 
 
 REASON_COLS = ["jobs received", "posted recently", "not a resume role", "wrong level", "wrong location",
@@ -242,18 +275,31 @@ def collection_settings():
         st.caption(f"⏰ Next automatic collection: **{nxt.strftime('%d %b %H:%M') if nxt > datetime.now() else 'in a few minutes'}**. "
                    "Each run looks back at least to the previous run, so no new job is missed. "
                    "JSearch (200 free searches a month) is used on the first run of each day only.")
-    st.markdown("**US job search keys (most jobs come from here)**  \n"
-                "Free: [Jooble](https://jooble.org/api/about) (API key by email) and "
-                "[JSearch on RapidAPI](https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch) "
-                "(subscribe to the free Basic plan, then copy your X-RapidAPI-Key). Both are optional.")
+    st.markdown("**Free API keys (all optional, all official)**  \n"
+                "Each one adds jobs from more job boards. Get the key from the link, paste it here, click Save keys. "
+                "Country boards are used only when a profile wants that country (Profiles → Locations).")
+    KEYS = [  # (setting, label, link, password?)
+        ("jooble_key", "Jooble key · many countries", "https://jooble.org/api/about", True),
+        ("rapidapi_key", "JSearch (RapidAPI) key · Google Jobs, all countries", "https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch", True),
+        ("reed_key", "Reed key · United Kingdom", "https://www.reed.co.uk/developers/jobseeker", True),
+        ("usajobs_key", "USAJOBS key · US government", "https://developer.usajobs.gov/apirequest/", True),
+        ("usajobs_email", "Email used for the USAJOBS key", "", False),
+        ("ft_id", "France Travail client ID · France", "https://francetravail.io/data/api/offres-emploi", False),
+        ("ft_secret", "France Travail client secret", "", True),
+        ("findwork_key", "Findwork key · software jobs, US / EU / remote", "https://findwork.dev/developers/", True),
+    ]
     with st.form("api_keys"):
-        k1, k2 = st.columns(2)
-        j_key = k1.text_input("Jooble API key (free)", db.setting("jooble_key"), type="password")
-        r_key = k2.text_input("RapidAPI key for JSearch (free plan)", db.setting("rapidapi_key"), type="password")
+        cols = st.columns(2)
+        vals = {}
+        for n, (k, label, link, pw) in enumerate(KEYS):
+            vals[k] = cols[n % 2].text_input(label, db.setting(k), type="password" if pw else "default",
+                                            help=f"Get it free: {link}" if link else None)
         if st.form_submit_button("Save keys"):
-            for k, v in (("jooble_key", j_key), ("rapidapi_key", r_key)):
+            for k, v in vals.items():
                 db.set_setting(k, v.strip())
             st.success("Saved. Click Collect now.")
+    st.caption("No key needed: Arbeitsagentur (Germany), Arbetsförmedlingen (Sweden), company career sites and the remote-job feeds. "
+               "Naukri, LinkedIn and Indeed have no free public API, so use the J button on their pages.")
 
     st.markdown("**Job feeds**")
     keys = list(collectors.FEEDS.items())
@@ -261,14 +307,15 @@ def collection_settings():
         for col, (key, label) in zip(st.columns(5), row):
             need = collectors.KEY_FEEDS.get(key)
             missing = need and not all(db.setting(k) for k in need)
-            on = col.toggle(label + (" (add key)" if missing else ""), value=db.setting(f"feed_{key}", "1") == "1",
+            on = col.toggle(label + (" (add key)" if missing else ""), help=(
+                                f"Used only when a profile wants {collectors.COUNTRY_FEEDS[key]}" if key in collectors.COUNTRY_FEEDS else None), value=db.setting(f"feed_{key}", "1") == "1",
                             key=f"feed_{key}", disabled=bool(missing))
             if not missing and on != (db.setting(f"feed_{key}", "1") == "1"):
                 db.set_setting(f"feed_{key}", "1" if on else "0")
 
     all_boards = collectors.boards()
     st.markdown(f"**Company career boards ({len(all_boards)})**  \nPaste a company's careers page link. "
-                "Works with Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday, Recruitee, BambooHR, Breezy HR "
+                "Works with Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday, Oracle Cloud, Recruitee, BambooHR, Breezy HR "
                 "and Bullhorn (most staffing / recruiting agencies). All free, no key.")
     with st.form("add_board", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")

@@ -6,7 +6,7 @@
 - save_tailored(): stores the uploaded resume as Company_Role.pdf, checks its new
   match % and remembers it for the job (used later in Apply & Track and the report).
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import json
 import re
 

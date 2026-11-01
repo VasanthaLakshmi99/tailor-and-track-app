@@ -10,7 +10,7 @@ For one job it builds a new resume PDF from the master resume:
   - education, certifications and everything else kept as they are
 It never adds a skill that is not in the resume or ticked by you.
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import re
 from pathlib import Path
 

@@ -11,7 +11,7 @@ Different spellings count as the same skill: "k8s" = "Kubernetes",
 "Amazon Web Services" = "AWS", "CI/CD" = "continuous integration", etc.
 This is an estimate to sort jobs - not an employer's ATS score.
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import re
 
 # canonical name: other spellings

@@ -4,7 +4,7 @@ Listens only on 127.0.0.1:8765 (your own laptop). The extension sends the job
 it read from the page; this file checks duplicates and saves it with db.py.
 app.py starts it automatically - you never run this file yourself.
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -107,6 +107,7 @@ class Handler(BaseHTTPRequestHandler):
             m["missing"] = m["missing"][:6]
             out.update(m)
             out["has_resume"] = bool(db.resume_text(pid))
+            out.update(experience_check(pid, jd))
             return self._send(200, out)
 
         if self.path == "/apply_info":      # J box "Fill application form"
@@ -123,6 +124,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *args):  # keep the terminal quiet
         pass
+
+
+def experience_check(pid, jd):
+    """Years the JD asks for vs the profile's experience range (Find jobs → 🎓 Experience)."""
+    import collectors
+    import matching
+    need = matching.jd_years(jd or "")
+    p = db.profile(pid)
+    lo, hi = collectors.exp_range(p)
+    have = matching.years_of_experience((p or {}).get("text") or "")
+    return {"exp_need": need, "exp_min": lo, "exp_max": hi, "exp_have": have,
+            "exp_ok": None if need is None else lo <= need <= hi}
 
 
 def resume_link(job):

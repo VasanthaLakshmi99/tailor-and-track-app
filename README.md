@@ -61,10 +61,20 @@ The app must be running for the J button to work.
 - **Profiles → 📁 Where tailored resumes are saved:** use a Google Drive / OneDrive folder with "Stream files" / "Files On-Demand".
 - **Profiles → 🧹 Free up space:** deletes tailored PDFs of jobs you did not apply to (applied ones are kept).
 
-### Optional free keys (more US jobs)
+### Optional free keys (more jobs, all official and free)
 In **Find jobs → ⚙️ Collection settings** you can add:
-- **Jooble** API key (free): https://jooble.org/api/about
-- **JSearch** on RapidAPI (free Basic plan, 200 searches/month): https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch
+
+| Key | Country | Get it |
+|---|---|---|
+| Jooble | many countries | https://jooble.org/api/about |
+| JSearch (RapidAPI, free Basic plan) | all countries (Google Jobs) | https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch |
+| Reed | United Kingdom | https://www.reed.co.uk/developers/jobseeker |
+| USAJOBS | US government | https://developer.usajobs.gov/apirequest/ |
+| France Travail (client ID + secret) | France | https://francetravail.io/data/api/offres-emploi |
+| Findwork | software jobs, US / EU / remote | https://findwork.dev/developers/ |
+
+No key needed: Arbeitsagentur (Germany), Arbetsförmedlingen (Sweden), 300 company career sites, remote-job feeds.
+Naukri, LinkedIn and Indeed have no free public API: use the J button on their pages.
 
 Never put keys in the code or on GitHub. Type them into the app.
 

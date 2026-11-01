@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Tailor&Track - J button",
-  "version": "1.3",
+  "version": "1.4",
   "description": "Save the job you are viewing to Tailor&Track, and fill application forms with your saved answers.",
   "action": {
     "default_popup": "popup.html",
@@ -23,16 +23,7 @@
   ],
   "host_permissions": [
     "http://127.0.0.1:8765/*",
-    "https://*.icims.com/*",
-    "https://*.greenhouse.io/*",
-    "https://*.lever.co/*",
-    "https://*.myworkdayjobs.com/*",
-    "https://*.taleo.net/*",
-    "https://*.jobvite.com/*",
-    "https://*.smartrecruiters.com/*",
-    "https://*.ashbyhq.com/*",
-    "https://*.workable.com/*",
-    "https://*.bamboohr.com/*"
+    "https://*/*"
   ],
   "background": {
     "service_worker": "background.js"

@@ -12,7 +12,7 @@ automatic collection and it can get accounts blocked. Use the J button there.
 Each job is kept for a profile only if its title fits the profile's target roles and
 (if set) its locations. Every job goes through the normal duplicate check.
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import html
 import json
 import re
@@ -26,7 +26,8 @@ import db
 import matching
 
 UA = {"User-Agent": "TailorTrack/1.0 (personal job tracker)"}
-PAUSE = 0.7            # seconds between boards, to be polite
+PAUSE = 0.7            # seconds between requests to the same site, to be polite
+BOARD_THREADS = 6      # companies checked at the same time (each one is a different site)
 WINDOW_HOURS = 24          # default; changed with the "Date posted" filter on Find jobs
 WINDOWS = {"Past 30 minutes": 0.5, "Past 1 hour": 1, "Past 3 hours": 3, "Past 6 hours": 6, "Past 10 hours": 10,
            "Past 24 hours": 24, "Past 3 days": 72, "Past week": 168, "Past month": 720}
@@ -123,12 +124,95 @@ SUGGESTED = [  # well-known companies with public boards; Tailor&Track checks ea
     ("ashby", "zapier", "Zapier"), ("ashby", "supabase", "Supabase"), ("ashby", "posthog", "PostHog"),
     ("ashby", "mercury", "Mercury"), ("ashby", "retool", "Retool"), ("ashby", "benchling", "Benchling"),
     ("lever", "netflix", "Netflix"), ("lever", "kraken123", "Kraken"), ("lever", "attentive", "Attentive"),
+    # pack 3 (2026-11): more companies that hire DevOps / SRE / cloud / platform engineers.
+    # A link that doesn't work is switched off automatically on the first collect.
+    ("greenhouse", "spacex", "SpaceX"), ("greenhouse", "andurilindustries", "Anduril"), ("greenhouse", "waymo", "Waymo"),
+    ("greenhouse", "fastly", "Fastly"), ("greenhouse", "cribl", "Cribl"), ("greenhouse", "digitalocean98", "DigitalOcean"),
+    ("greenhouse", "coreweave", "CoreWeave"), ("greenhouse", "wizinc", "Wiz"), ("greenhouse", "sigmacomputing", "Sigma Computing"),
+    ("greenhouse", "chronosphere", "Chronosphere"), ("greenhouse", "temporaltechnologies", "Temporal"),
+    ("greenhouse", "circleci", "CircleCI"), ("greenhouse", "netlify", "Netlify"), ("greenhouse", "grammarly", "Grammarly"),
+    ("greenhouse", "intercom", "Intercom"), ("greenhouse", "klaviyo", "Klaviyo"), ("greenhouse", "mixpanel", "Mixpanel"),
+    ("greenhouse", "carta", "Carta"), ("greenhouse", "chainalysis", "Chainalysis"), ("greenhouse", "dataiku", "Dataiku"),
+    ("greenhouse", "faire", "Faire"), ("greenhouse", "lattice", "Lattice"), ("greenhouse", "nuro", "Nuro"),
+    ("greenhouse", "oscar", "Oscar Health"), ("greenhouse", "thumbtack", "Thumbtack"), ("greenhouse", "vimeo", "Vimeo"),
+    ("greenhouse", "warbyparker", "Warby Parker"), ("greenhouse", "yext", "Yext"), ("greenhouse", "zocdoc", "Zocdoc"),
+    ("greenhouse", "betterment", "Betterment"), ("greenhouse", "bitgo", "BitGo"), ("greenhouse", "calendly", "Calendly"),
+    ("greenhouse", "doximity", "Doximity"), ("greenhouse", "gemini", "Gemini"), ("greenhouse", "justworks", "Justworks"),
+    ("greenhouse", "marqeta", "Marqeta"), ("greenhouse", "nextdoor", "Nextdoor"), ("greenhouse", "opendoor", "Opendoor"),
+    ("greenhouse", "outreach", "Outreach"), ("greenhouse", "pendo", "Pendo"), ("greenhouse", "seatgeek", "SeatGeek"),
+    ("greenhouse", "verkada", "Verkada"), ("greenhouse", "zoominfo", "ZoomInfo"), ("greenhouse", "coupang", "Coupang"),
+    ("greenhouse", "datavant", "Datavant"), ("greenhouse", "headspace", "Headspace"), ("greenhouse", "imc", "IMC Trading"),
+    ("greenhouse", "point72", "Point72"), ("greenhouse", "twosigma", "Two Sigma"), ("greenhouse", "hudsonrivertrading", "Hudson River Trading"),
+    ("greenhouse", "jumptrading", "Jump Trading"), ("greenhouse", "drweng", "DRW"), ("greenhouse", "affinity", "Affinity"),
+    ("greenhouse", "appian", "Appian"), ("greenhouse", "braze", "Braze"), ("greenhouse", "c3iot", "C3 AI"),
+    ("greenhouse", "clari", "Clari"), ("greenhouse", "collibra", "Collibra"), ("greenhouse", "contentful", "Contentful"),
+    ("greenhouse", "dbtlabsinc", "dbt Labs"), ("greenhouse", "everbridge", "Everbridge"), ("greenhouse", "expensify", "Expensify"),
+    ("greenhouse", "fanatics", "Fanatics"), ("greenhouse", "flatironhealth", "Flatiron Health"), ("greenhouse", "gofundme", "GoFundMe"),
+    ("greenhouse", "hims", "Hims & Hers"), ("greenhouse", "iterable", "Iterable"), ("greenhouse", "jfrog", "JFrog"),
+    ("greenhouse", "komodohealth", "Komodo Health"), ("greenhouse", "lucidsoftware", "Lucid Software"),
+    ("greenhouse", "mavenclinic", "Maven Clinic"), ("greenhouse", "medallia", "Medallia"), ("greenhouse", "nium", "Nium"),
+    ("greenhouse", "onepassword", "1Password"), ("greenhouse", "pagaya", "Pagaya"), ("greenhouse", "qualtrics", "Qualtrics"),
+    ("greenhouse", "redcanary", "Red Canary"), ("greenhouse", "rokt", "Rokt"), ("greenhouse", "sentinellabs", "SentinelOne"),
+    ("greenhouse", "sprinklr", "Sprinklr"), ("greenhouse", "stackadapt", "StackAdapt"), ("greenhouse", "tempus", "Tempus"),
+    ("greenhouse", "thetradedesk", "The Trade Desk"), ("greenhouse", "upstart", "Upstart"), ("greenhouse", "via", "Via"),
+    ("greenhouse", "wealthfront", "Wealthfront"), ("greenhouse", "xometry", "Xometry"), ("greenhouse", "zipline", "Zipline"),
+    ("greenhouse", "clickhouse", "ClickHouse"), ("greenhouse", "planetscale", "PlanetScale"), ("greenhouse", "redis", "Redis"),
+    ("greenhouse", "couchbaseinc", "Couchbase"), ("greenhouse", "yugabyte", "Yugabyte"), ("greenhouse", "starburst", "Starburst"),
+    ("lever", "binance", "Binance"), ("lever", "wealthsimple", "Wealthsimple"), ("lever", "zoox", "Zoox"),
+    ("lever", "mistral", "Mistral AI"), ("lever", "highspot", "Highspot"), ("lever", "eventbrite", "Eventbrite"),
+    ("lever", "shieldai", "Shield AI"), ("lever", "whoop", "WHOOP"), ("lever", "veeva", "Veeva Systems"),
+    ("ashby", "rippling", "Rippling"), ("ashby", "vanta", "Vanta"), ("ashby", "1password", "1Password"),
+    ("ashby", "snyk", "Snyk"), ("ashby", "modal", "Modal"), ("ashby", "replit", "Replit"), ("ashby", "cohere", "Cohere"),
+    ("ashby", "perplexity", "Perplexity"), ("ashby", "elevenlabs", "ElevenLabs"), ("ashby", "harvey", "Harvey"),
+    ("ashby", "sierra", "Sierra"), ("ashby", "plaid", "Plaid"), ("ashby", "neon", "Neon"), ("ashby", "render", "Render"),
+    ("ashby", "fly", "Fly.io"), ("ashby", "tailscale", "Tailscale"), ("ashby", "airbyte", "Airbyte"),
+    ("workday", "jnj.wd5/JNJJobs", "Johnson & Johnson"), ("workday", "cisco.wd5/Cisco_Careers", "Cisco"),
+    ("workday", "statestreet.wd1/Global", "State Street"), ("workday", "bankofamerica.wd1/BofA_Careers", "Bank of America"),
+    ("workday", "usbank.wd1/US_Bank_Careers", "U.S. Bank"), ("workday", "pnc.wd5/External", "PNC"),
+    ("workday", "truist.wd1/Careers", "Truist"), ("workday", "td.wd3/TD_Bank_Careers", "TD Bank"),
+    ("workday", "geico.wd1/External", "GEICO"), ("workday", "travelers.wd5/External", "Travelers"),
+    ("workday", "allstate.wd5/allstate_careers", "Allstate"), ("workday", "progressive.wd5/Progressive", "Progressive"),
+    ("workday", "elevancehealth.wd1/ANT", "Elevance Health"), ("workday", "cigna.wd5/cignacareers", "Cigna"),
+    ("workday", "unitedhealthgroup.wd5/External", "UnitedHealth Group"), ("workday", "kohls.wd1/kohlscareers", "Kohl's"),
+    ("workday", "lowes.wd5/LWS_External_CS", "Lowe's"), ("workday", "homedepot.wd5/CareerDepot", "The Home Depot"),
+    ("workday", "bestbuy.wd5/BestBuy", "Best Buy"), ("workday", "nike.wd1/nke", "Nike"),
+    ("workday", "ford.wd1/Ford_External_Careers", "Ford"), ("workday", "stellantis.wd3/External_Career_Site_ID01", "Stellantis"),
+    ("workday", "rivian.wd1/Careers", "Rivian"), ("workday", "lucid.wd5/External", "Lucid Motors"),
+    ("workday", "verizon.wd12/verizon-careers", "Verizon"), ("workday", "tmobile.wd1/External", "T-Mobile"),
+    ("workday", "att.wd1/ATTGeneral", "AT&T"), ("workday", "charter.wd5/Spectrum_Careers", "Charter / Spectrum"),
+    ("workday", "accenture.wd103/AccentureCareers", "Accenture"), ("workday", "kpmg.wd1/KPMG_Careers", "KPMG US"),
+    ("workday", "pwc.wd3/Global_Experienced_Careers", "PwC"), ("workday", "deloitte.wd1/US", "Deloitte US"),
+    ("workday", "leidos.wd5/External", "Leidos"), ("workday", "boozallen.wd1/BAH_Jobs", "Booz Allen Hamilton"),
+    ("workday", "gdit.wd5/External_Career_Site", "GDIT"), ("workday", "caci.wd1/External", "CACI"),
+    ("workday", "snapchat.wd1/snap", "Snap"), ("workday", "ebay.wd5/apply", "eBay"), ("workday", "intuit.wd1/Intuit", "Intuit"),
+    ("workday", "vmware.wd1/VMware", "VMware"), ("workday", "netapp.wd1/NetApp_Careers", "NetApp"),
+    ("workday", "equinix.wd1/External", "Equinix"), ("workday", "kla.wd1/Search", "KLA"),
+    ("workday", "amd.wd1/External", "AMD"), ("workday", "qualcomm.wd5/External", "Qualcomm"),
+    ("workday", "micron.wd1/External", "Micron"), ("workday", "western-digital.wd1/WesternDigitalCareers", "Western Digital"),
+    ("workday", "fiserv.wd5/EXT", "Fiserv"), ("workday", "globalpayments.wd1/Global_Payments_Careers", "Global Payments"),
+    ("workday", "fis.wd5/SearchJobs", "FIS"), ("workday", "spglobal.wd5/SPGI_Careers", "S&P Global"),
+    ("workday", "blackrock.wd1/BlackRock_Professional", "BlackRock"), ("workday", "ms.wd5/External", "Morgan Stanley"),
+    ("workday", "dowjones.wd1/Dow_Jones_Career", "Dow Jones"), ("workday", "warnerbros.wd5/global", "Warner Bros. Discovery"),
+    ("workday", "kelloggs.wd1/Kellanova", "Kellanova"), ("workday", "generalmills.wd5/Careers", "General Mills"),
+    ("workday", "dowjones.wd1/Dow_Jones_Career", "Dow Jones"),
+    # Oracle Cloud career sites (host/siteNumber)
+    ("oracle", "jpmc.fa.oraclecloud.com/CX_1001", "JPMorgan Chase"), ("oracle", "eeho.fa.us2.oraclecloud.com/CX_45001", "Oracle"),
+    # SmartRecruiters
+    ("smartrecruiters", "Experian", "Experian"), ("smartrecruiters", "Wipro", "Wipro"), ("smartrecruiters", "Equinox", "Equinox"),
+    ("smartrecruiters", "LinkedIn3", "LinkedIn"), ("smartrecruiters", "Square", "Square"), ("smartrecruiters", "Ubisoft2", "Ubisoft"),
+    ("smartrecruiters", "Sanofi", "Sanofi"), ("smartrecruiters", "Avanade", "Avanade"), ("smartrecruiters", "Publicis Groupe", "Publicis Sapient"),
 ]
-FEEDS = {"jooble": "Jooble", "jsearch": "JSearch", "himalayas": "Himalayas", "wwr": "We Work Remotely", "remotive": "Remotive", "themuse": "The Muse",
+FEEDS = {"jooble": "Jooble", "jsearch": "JSearch", "usajobs": "USAJOBS", "reed": "Reed (UK)",
+         "arbeitsagentur": "Arbeitsagentur (DE)", "jobtech": "Arbetsförmedlingen (SE)", "francetravail": "France Travail (FR)",
+         "findwork": "Findwork", "himalayas": "Himalayas", "wwr": "We Work Remotely", "remotive": "Remotive", "themuse": "The Muse",
          "arbeitnow": "Arbeitnow", "remoteok": "Remote OK", "jobicy": "Jobicy"}
-KEY_FEEDS = {"jooble": ("jooble_key",), "jsearch": ("rapidapi_key",)}   # optional free keys
+KEY_FEEDS = {"jooble": ("jooble_key",), "jsearch": ("rapidapi_key",), "usajobs": ("usajobs_key", "usajobs_email"),
+             "reed": ("reed_key",), "francetravail": ("ft_id", "ft_secret"), "findwork": ("findwork_key",)}
+COUNTRY_FEEDS = {"usajobs": "United States", "reed": "United Kingdom", "arbeitsagentur": "Germany",
+                 "jobtech": "Sweden", "francetravail": "France"}   # official job boards of one country   # optional free keys
 JSEARCH_TERMS = 3   # free plan = 200 searches a month, so only the top 3 roles, 1 page each (about 90 a month)   # need a free API key
-SNIPPET_SOURCES = {"Jooble"}   # these give a short JD; the full JD comes when you open the job with J
+SNIPPET_SOURCES = {"Jooble", "Reed"}
+TITLE_ONLY_OK = {"Arbeitsagentur"}   # official board; if its JD can't be read, the title decides   # these give a short JD; the full JD comes when you open the job with J
 MIN_MATCH = 30   # a collected job must share at least this % of its skills with the resume
 
 
@@ -183,6 +267,7 @@ PATTERNS = [
     ("recruitee", r"([a-z0-9-]+)\.recruitee\.com"),
     ("bamboohr", r"([a-z0-9-]+)\.bamboohr\.com"),
     ("breezy", r"([a-z0-9-]+)\.breezy\.hr"),
+    ("oracle", r"([a-z0-9-]+\.fa(?:\.[a-z0-9]+)?\.oraclecloud\.com)/hcmUI/CandidateExperience/[a-z-]+/sites/([A-Za-z0-9_]+)"),
 ]
 _SKIP_TOKENS = {"embed", "jobs", "v1", "api", "job_board", "js", "www", "app", "help", "marketing"}
 
@@ -192,6 +277,8 @@ def parse_board(text):
         m = re.search(pat, text or "", re.I)
         if m and m.group(1).lower() not in _SKIP_TOKENS:
             if provider == "workday":                       # token = "tenant.wd5/Site"
+                return provider, f"{m.group(1).lower()}/{m.group(2)}"
+            if provider == "oracle":                        # token = "host/CX_1001"
                 return provider, f"{m.group(1).lower()}/{m.group(2)}"
             if provider == "bullhorn":                      # token = "33/corpToken"
                 return provider, f"{m.group(1)}/{m.group(2)}"
@@ -566,6 +653,237 @@ def fetch_microsoft(token, name):
     return out
 
 
+def fetch_oracle(token, name):
+    """Oracle Cloud HCM career site (<host>.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001):
+    the public JSON the career site itself uses. Free, no key. Used by JPMorgan Chase, Oracle and others."""
+    host, site = token.split("/", 1)
+    api = f"https://{host}/hcmRestApi/resources/latest"
+    out, seen = [], set()
+    for term in _search_terms():
+        finder = (f'findReqs;siteNumber={site},facetsList=LOCATIONS;POSTING_DATES,limit=25,'
+                  f'keyword="{term}",sortBy=POSTING_DATES_DESC')
+        r = _get(f"{api}/recruitingCEJobRequisitions", params={"onlyData": "true", "expand": "requisitionList", "finder": finder})
+        if r.status_code in (400, 404):
+            raise LookupError("board not found")
+        r.raise_for_status()
+        for item in r.json().get("items") or []:
+            for j in item.get("requisitionList") or []:
+                jid = str(j.get("Id") or "")
+                if not jid or jid in seen:
+                    continue
+                seen.add(jid)
+                out.append({"company": name, "title": j.get("Title", ""),
+                            "location": j.get("PrimaryLocation") or j.get("PrimaryLocationCountry") or "",
+                            "url": f"https://{host}/hcmUI/CandidateExperience/en/sites/{site}/job/{jid}",
+                            "jd": None, "posted": _when(j.get("PostedDate")), "source": "Oracle Cloud",
+                            "_detail": f"{api}/recruitingCEJobRequisitionDetails?onlyData=true&expand=all"
+                                       f'&finder=ById;Id="{jid}",siteNumber={site}', "_kind": "oracle"})
+        time.sleep(PAUSE)
+    return out
+
+
+def _oracle_jd(detail_url):
+    r = _get(detail_url)
+    if not r.ok:
+        return ""
+    items = r.json().get("items") or [{}]
+    d = items[0] if items else {}
+    return "\n\n".join(_text(d.get(k)) for k in ("ExternalDescriptionStr", "ExternalResponsibilitiesStr",
+                                                  "ExternalQualificationsStr") if d.get(k)).strip()
+
+
+def fetch_usajobs(search_terms):
+    """USAJOBS (US government jobs): free official API, key at developer.usajobs.gov (your email + key)."""
+    headers = {"Host": "data.usajobs.gov", "User-Agent": db.setting("usajobs_email"),
+               "Authorization-Key": db.setting("usajobs_key")}
+    days = max(1, min(60, int(-(-window_hours() // 24))))
+    out, seen = [], set()
+    for term in search_terms:
+        r = requests.get("https://data.usajobs.gov/api/search", headers=headers, timeout=30,
+                         params={"Keyword": term, "DatePosted": days, "ResultsPerPage": 100, "SortField": "opendate"})
+        if r.status_code in (401, 403):
+            raise RuntimeError("API key not accepted: check the USAJOBS email and key")
+        if not r.ok:
+            continue
+        for it in ((r.json().get("SearchResult") or {}).get("SearchResultItems") or []):
+            d = it.get("MatchedObjectDescriptor") or {}
+            url = d.get("PositionURI") or ""
+            if not url or url in seen:
+                continue
+            seen.add(url)
+            det = (d.get("UserArea") or {}).get("Details") or {}
+            jd = "\n\n".join(x for x in (det.get("JobSummary"), d.get("QualificationSummary"),
+                                         "\n".join(det.get("MajorDuties") or [])) if x)
+            out.append({"company": d.get("OrganizationName") or d.get("DepartmentName") or "US Government",
+                        "title": d.get("PositionTitle", ""), "location": (d.get("PositionLocationDisplay") or "") + ", US",
+                        "url": url, "jd": jd, "posted": _when(d.get("PublicationStartDate")), "source": "USAJOBS"})
+        time.sleep(PAUSE)
+    return out
+
+
+def _recent_days():
+    return max(1, int(-(-window_hours() // 24)))
+
+
+def fetch_reed(search_terms):
+    """Reed.co.uk (UK's biggest job board): official free API key at reed.co.uk/developers/jobseeker."""
+    auth = (db.setting("reed_key"), "")
+    out, seen = [], set()
+    now = datetime.now(timezone.utc)
+    for term in search_terms:
+        r = requests.get("https://www.reed.co.uk/api/1.0/search", auth=auth, headers=UA, timeout=30,
+                         params={"keywords": term, "resultsToTake": 100})
+        if r.status_code in (401, 403):
+            raise RuntimeError("API key not accepted: check the Reed key")
+        if not r.ok:
+            continue
+        for j in r.json().get("results") or []:
+            jid = j.get("jobId")
+            if not jid or jid in seen:
+                continue
+            seen.add(jid)
+            posted = None
+            m = re.match(r"(\d{1,2})/(\d{1,2})/(\d{4})", str(j.get("date") or ""))
+            if m:                                             # "30/10/2026": the day only, so count it as noon
+                posted = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)), 12, tzinfo=timezone.utc)
+                if posted > now:
+                    posted = now
+            out.append({"company": j.get("employerName", ""), "title": j.get("jobTitle", ""),
+                        "location": f"{j.get('locationName') or ''}, United Kingdom",
+                        "url": j.get("jobUrl") or f"https://www.reed.co.uk/jobs/{jid}", "jd": None,
+                        "posted": posted or now - timedelta(hours=1), "source": "Reed",
+                        "_detail": f"https://www.reed.co.uk/api/1.0/jobs/{jid}", "_kind": "reed",
+                        "_snippet": _text(j.get("jobDescription"))})
+        time.sleep(PAUSE)
+    return out
+
+
+def _reed_jd(detail_url):
+    r = requests.get(detail_url, auth=(db.setting("reed_key"), ""), headers=UA, timeout=25)
+    return _text(r.json().get("jobDescription")) if r.ok else ""
+
+
+def fetch_arbeitsagentur(search_terms):
+    """Bundesagentur für Arbeit (Germany's official job board, 1M+ jobs): free, the key is public."""
+    headers = {**UA, "X-API-Key": "jobboerse-jobsuche"}
+    out, seen = [], set()
+    for term in search_terms:
+        r = requests.get("https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobs", headers=headers,
+                         timeout=30, params={"was": term, "veroeffentlichtseit": min(100, _recent_days()),
+                                             "size": 100, "page": 1, "angebotsart": 1})
+        if not r.ok:
+            continue
+        for j in r.json().get("stellenangebote") or []:
+            ref = j.get("refnr") or j.get("referenznummer")
+            if not ref or ref in seen:
+                continue
+            seen.add(ref)
+            place = j.get("arbeitsort") or {}
+            out.append({"company": j.get("arbeitgeber", ""), "title": j.get("titel") or j.get("beruf") or "",
+                        "location": ", ".join(x for x in (place.get("ort"), place.get("region"), place.get("land") or "Germany") if x),
+                        "url": j.get("externeUrl") or f"https://www.arbeitsagentur.de/jobsuche/jobdetail/{ref}",
+                        "jd": None, "posted": _when(j.get("aktuelleVeroeffentlichungsdatum") or j.get("modifikationsTimestamp")),
+                        "source": "Arbeitsagentur", "_kind": "arbeitsagentur",
+                        "_detail": "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/jobdetails/" +
+                                   __import__("base64").b64encode(ref.encode()).decode()})
+        time.sleep(PAUSE)
+    return out
+
+
+def _arbeitsagentur_jd(detail_url):
+    try:
+        r = requests.get(detail_url, headers={**UA, "X-API-Key": "jobboerse-jobsuche"}, timeout=25)
+        return _text(r.json().get("stellenangebotsBeschreibung")) if r.ok else ""
+    except (requests.RequestException, ValueError):
+        return ""
+
+
+def fetch_jobtech(search_terms):
+    """Arbetsförmedlingen / JobTech (Sweden's official job board): free, no key."""
+    after = (datetime.now() - timedelta(hours=window_hours())).strftime("%Y-%m-%dT%H:%M:%S")
+    out, seen = [], set()
+    for term in search_terms:
+        r = requests.get("https://jobsearch.api.jobtechdev.se/search", headers={**UA, "accept": "application/json"},
+                         timeout=30, params={"q": term, "published-after": after, "limit": 100})
+        if not r.ok:
+            continue
+        for j in r.json().get("hits") or []:
+            if j.get("id") in seen:
+                continue
+            seen.add(j.get("id"))
+            addr = j.get("workplace_address") or {}
+            out.append({"company": (j.get("employer") or {}).get("name", ""), "title": j.get("headline", ""),
+                        "location": ", ".join(x for x in (addr.get("municipality"), addr.get("region"), addr.get("country") or "Sweden") if x),
+                        "url": (j.get("application_details") or {}).get("url") or j.get("webpage_url") or "",
+                        "jd": (j.get("description") or {}).get("text") or "", "posted": _when(j.get("publication_date")),
+                        "source": "Arbetsförmedlingen"})
+        time.sleep(PAUSE)
+    return out
+
+
+_FT_TOKEN = {"value": None, "until": 0}
+
+
+def _francetravail_token():
+    if _FT_TOKEN["value"] and time.time() < _FT_TOKEN["until"]:
+        return _FT_TOKEN["value"]
+    r = requests.post("https://entreprise.francetravail.fr/connexion/oauth2/access_token", params={"realm": "/partenaire"},
+                      data={"grant_type": "client_credentials", "client_id": db.setting("ft_id"),
+                            "client_secret": db.setting("ft_secret"), "scope": "api_offresdemploiv2 o2dsoffre"}, timeout=25)
+    if not r.ok:
+        raise RuntimeError("France Travail: client id / secret not accepted")
+    d = r.json()
+    _FT_TOKEN.update(value=d["access_token"], until=time.time() + int(d.get("expires_in", 1400)) - 60)
+    return _FT_TOKEN["value"]
+
+
+def fetch_francetravail(search_terms):
+    """France Travail (France's official job board): free id + secret at francetravail.io."""
+    days = next((d for d in (1, 3, 7, 14, 31) if d >= _recent_days()), 31)
+    out, seen = [], set()
+    for term in search_terms:
+        r = requests.get("https://api.francetravail.io/partenaire/offresdemploi/v2/offres/search", timeout=30,
+                         headers={**UA, "Authorization": f"Bearer {_francetravail_token()}", "Accept": "application/json"},
+                         params={"motsCles": term, "publieeDepuis": days, "range": "0-149"})
+        if r.status_code == 204 or not r.ok:
+            continue
+        for j in r.json().get("resultats") or []:
+            if j.get("id") in seen:
+                continue
+            seen.add(j.get("id"))
+            out.append({"company": (j.get("entreprise") or {}).get("nom", ""), "title": j.get("intitule", ""),
+                        "location": f"{(j.get('lieuTravail') or {}).get('libelle', '')}, France",
+                        "url": (j.get("origineOffre") or {}).get("urlOrigine") or
+                               f"https://candidat.francetravail.fr/offres/recherche/detail/{j.get('id')}",
+                        "jd": j.get("description") or "", "posted": _when(j.get("dateCreation")), "source": "France Travail"})
+        time.sleep(PAUSE)
+    return out
+
+
+def fetch_findwork(search_terms):
+    """Findwork.dev (software / DevOps jobs, mostly US + Europe + remote): free key at findwork.dev."""
+    headers = {**UA, "Authorization": f"Token {db.setting('findwork_key')}"}
+    out, seen = [], set()
+    for term in search_terms:
+        r = requests.get("https://findwork.dev/api/jobs/", headers=headers, timeout=30,
+                         params={"search": term, "sort_by": "date"})
+        if r.status_code in (401, 403):
+            raise RuntimeError("API key not accepted: check the Findwork key")
+        if not r.ok:
+            continue
+        for j in r.json().get("results") or []:
+            if j.get("url") in seen:
+                continue
+            seen.add(j.get("url"))
+            loc = j.get("location") or ""
+            out.append({"company": j.get("company_name", ""), "title": j.get("role", ""),
+                        "location": (loc + (" (Remote)" if j.get("remote") else "")).strip() or ("Remote" if j.get("remote") else ""),
+                        "url": j.get("url", ""), "jd": _text(j.get("text")), "posted": _when(j.get("date_posted")),
+                        "source": "Findwork"})
+        time.sleep(PAUSE)
+    return out
+
+
 def _smartrecruiters_jd(detail_url):
     r = _get(detail_url)
     if not r.ok:
@@ -575,16 +893,31 @@ def _smartrecruiters_jd(detail_url):
                        ("jobDescription", "qualifications", "additionalInformation", "companyDescription")).strip()
 
 
+JOOBLE_SITE = {"gb": "uk"}      # Jooble's country sites: in.jooble.org, uk.jooble.org, de.jooble.org …
+
+
 def fetch_jooble(search_terms, location="United States"):
-    """Jooble: free API (jooble.org/api/about). Searches many US job boards."""
+    """Jooble: free API (jooble.org/api/about). Searches the job boards of the country.
+    Outside the US it uses that country's Jooble site, and falls back to jooble.org."""
     key = db.setting("jooble_key")
+    iso2 = COUNTRIES.get(location, ("us",))[0]
+    hosts = ["jooble.org"] if iso2 == "us" else [f"{JOOBLE_SITE.get(iso2, iso2)}.jooble.org", "jooble.org"]
     out, seen = [], set()
     day = (datetime.now(timezone.utc) - timedelta(hours=window_hours())).strftime("%Y-%m-%d")
     for term in search_terms:
-        r = requests.post(f"https://jooble.org/api/{key}", headers=UA, timeout=25,
-                          json={"keywords": term, "location": location, "datecreatedfrom": day, "ResultOnPage": 50})
-        if r.status_code in (401, 403):
-            raise RuntimeError("API key not accepted: check the Jooble key")
+        for host in hosts:
+            try:
+                r = requests.post(f"https://{host}/api/{key}", headers=UA, timeout=25,
+                                  json={"keywords": term, "location": "" if host != "jooble.org" else location,
+                                        "datecreatedfrom": day, "ResultOnPage": 50})
+            except requests.RequestException:
+                continue
+            if r.status_code in (401, 403) and host == hosts[-1]:
+                raise RuntimeError("API key not accepted: check the Jooble key")
+            if r.ok:
+                break
+        else:
+            continue
         if not r.ok:
             continue
         for j in r.json().get("jobs", []):
@@ -594,7 +927,7 @@ def fetch_jooble(search_terms, location="United States"):
             seen.add(url)
             loc = j.get("location") or ""
             out.append({"company": j.get("company", ""), "title": _text(j.get("title")),
-                        "location": f"{loc}, US" if loc else "United States", "url": url, "jd": _text(j.get("snippet")),
+                        "location": f"{loc}, {location}" if loc else location, "url": url, "jd": _text(j.get("snippet")),
                         "posted": _when(j.get("updated")), "source": "Jooble"})
         time.sleep(PAUSE)
     return out
@@ -769,11 +1102,13 @@ def fetch_jobicy():
 FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby,
             "smartrecruiters": fetch_smartrecruiters, "workable": fetch_workable, "workday": fetch_workday,
             "bullhorn": fetch_bullhorn, "recruitee": fetch_recruitee, "bamboohr": fetch_bamboohr, "breezy": fetch_breezy,
-            "amazon": fetch_amazon, "microsoft": fetch_microsoft}
+            "amazon": fetch_amazon, "microsoft": fetch_microsoft, "oracle": fetch_oracle}
 SOURCE_NAME = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "smartrecruiters": "SmartRecruiters",
                "workable": "Workable", "workday": "Workday", "bullhorn": "Bullhorn", "recruitee": "Recruitee",
-               "bamboohr": "BambooHR", "breezy": "Breezy HR", "amazon": "Amazon Jobs", "microsoft": "Microsoft Careers"}
-DETAIL_READERS = {"workday": _workday_jd, "breezy": _breezy_jd}
+               "bamboohr": "BambooHR", "breezy": "Breezy HR", "amazon": "Amazon Jobs", "microsoft": "Microsoft Careers",
+               "oracle": "Oracle Cloud"}
+DETAIL_READERS = {"workday": _workday_jd, "breezy": _breezy_jd, "oracle": _oracle_jd, "reed": _reed_jd,
+                  "arbeitsagentur": _arbeitsagentur_jd}
 
 
 # ---------------------------------------------------------------- does a job fit a profile?
@@ -983,6 +1318,8 @@ def fits(job, p, since):
 def skills_ok(job, p):
     """The job's skills must overlap with the resume (checked once the full JD is known)."""
     jd = job.get("jd") or ""
+    if not jd.strip() and job.get("source") in TITLE_ONLY_OK:   # the JD comes when you open the job with J
+        return True
     need = 1 if job.get("source") in SNIPPET_SOURCES else 3   # Jooble only gives a few lines of the JD
     if len(matching.find_skills(jd, strict=True)) < need:     # too few real skills to judge the fit
         return False
@@ -993,7 +1330,9 @@ def skills_ok(job, p):
 def wrong_fit(job, p):
     """Why a job doesn't fit the profile's main roles / level / location (None = fits)."""
     title = job.get("title") or ""
-    if NOT_TECH_ROLE.search(title) or not matching.title_fit(title, db.roles_for_search(p)):
+    roles = db.roles_for_search(p)
+    inner = " ".join(re.findall(r"\(([^)]+)\)", title))     # "IT Specialist (DevOps Engineer)" on USAJOBS
+    if NOT_TECH_ROLE.search(title) or not (matching.title_fit(title, roles) or (inner and matching.title_fit(inner, roles))):
         return "not a resume role"
     if not level_ok(title, matching.years_of_experience((p or {}).get("text") or "")):
         return "wrong level"
@@ -1043,7 +1382,11 @@ def _save_for_profiles(jobs, profiles, since, source, summary):
                 _count(summary, source, "already in Tailor&Track")
                 continue
             if job.get("jd") is None and job.get("_detail"):          # SmartRecruiters/Workday: JD only when needed
-                job["jd"] = DETAIL_READERS.get(job.get("_kind"), _smartrecruiters_jd)(job["_detail"])
+                try:
+                    job["jd"] = DETAIL_READERS.get(job.get("_kind"), _smartrecruiters_jd)(job["_detail"])
+                except (requests.RequestException, ValueError):
+                    job["jd"] = ""
+                job["jd"] = job["jd"] or job.get("_snippet") or ""
             if not exp_ok(job.get("jd"), p):                          # asks for more (or less) experience
                 _count(summary, source, "experience")
                 continue
@@ -1080,10 +1423,10 @@ def run(progress=None, auto=False):
         if not profiles:
             summary["errors"].append("No profile has target roles or a resume yet (Profiles page).")
             return summary
-        if not boards() or db.setting("suggested_version") != "2":   # add the well-known companies once
+        if not boards() or db.setting("suggested_version") != "3":   # add the well-known companies once
             for prov, tok, nm in SUGGESTED:
                 add_board(prov, tok, nm)
-            db.set_setting("suggested_version", "2")
+            db.set_setting("suggested_version", "3")
         active = [b for b in boards() if b["active"]]
         feeds = [f for f in FEEDS if feed_ready(f)]
         if auto and db.setting("last_collect_day") == db.today():
@@ -1091,36 +1434,51 @@ def run(progress=None, auto=False):
         summary["skipped_feeds"] = [FEEDS[f] for f in KEY_FEEDS if not feed_ready(f)]
         total = len(active) + len(feeds)
         step = 0
-        for b in active:
-            step += 1
-            if progress:
-                progress(step / max(total, 1), f"{b['name']} ({SOURCE_NAME[b['provider']]})")
+        def fetch_board(b):                     # runs in a few threads at once (different companies)
             try:
-                jobs = FETCHERS[b["provider"]](b["token"], b["name"])
-                recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
-                summary["found"] += len(recent)
-                _save_for_profiles(recent, profiles, since, SOURCE_NAME[b["provider"]], summary)
-                _board_status(b["id"], f"OK · {len(jobs)} open · {len(recent)} new")
-            except LookupError:
-                _board_status(b["id"], "Not found: switched off (check the link or remove it)")
-                update_board(b["id"], active=False)            # don't slow down the next runs
-                summary["errors"].append(f"{b['name']}: board not found")
-            except requests.ConnectionError:
-                _board_status(b["id"], "No connection: check the internet, then Collect now")
-                summary["errors"].append(f"{b['name']}: no internet connection")
-            except Exception as e:  # one broken board never stops the others
-                _board_status(b["id"], f"Error: {str(e)[:80]}")
-                summary["errors"].append(f"{b['name']}: {str(e)[:80]}")
-            time.sleep(PAUSE)
+                return b, FETCHERS[b["provider"]](b["token"], b["name"]), None
+            except Exception as e:
+                return b, None, e
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=BOARD_THREADS) as pool:
+            for fut in as_completed([pool.submit(fetch_board, b) for b in active]):
+                b, jobs, err = fut.result()
+                step += 1
+                if progress:
+                    progress(step / max(total, 1), f"{b['name']} ({SOURCE_NAME[b['provider']]})")
+                try:
+                    if err:
+                        raise err
+                    recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
+                    summary["found"] += len(recent)
+                    _save_for_profiles(recent, profiles, since, SOURCE_NAME[b["provider"]], summary)
+                    _board_status(b["id"], f"OK · {len(jobs)} open · {len(recent)} new")
+                except LookupError:
+                    _board_status(b["id"], "Not found: switched off (check the link or remove it)")
+                    update_board(b["id"], active=False)            # don't slow down the next runs
+                    summary["errors"].append(f"{b['name']}: board not found")
+                except requests.ConnectionError:
+                    _board_status(b["id"], "No connection: check the internet, then Collect now")
+                    summary["errors"].append(f"{b['name']}: no internet connection")
+                except Exception as e:  # one broken board never stops the others
+                    _board_status(b["id"], f"Error: {str(e)[:80]}")
+                    summary["errors"].append(f"{b['name']}: {str(e)[:80]}")
         terms = sorted({r for p in profiles for r in db.roles_for_search(p)[:4]})   # main roles only (be polite)
         big_terms = list(dict.fromkeys(r for p in profiles for r in db.roles_for_search(p)[:8]))  # top 8 roles, in order
         countries = target_countries(profiles)
         _COUNTRIES_NOW[:] = countries
+        feeds = [f for f in feeds if f not in COUNTRY_FEEDS or COUNTRY_FEEDS[f] in countries]
+        summary["skipped_feeds"] = [FEEDS[f] for f in KEY_FEEDS if not feed_ready(f)
+                                    and (f not in COUNTRY_FEEDS or COUNTRY_FEEDS[f] in countries)]
         each = lambda fn: [j for c in countries for j in fn(c)]          # run a feed once per country
         feed_fetch = {"jooble": lambda: each(lambda c: fetch_jooble(big_terms, location=c)),
                       "jsearch": lambda: each(lambda c: fetch_jsearch(big_terms, country=COUNTRIES[c][0],
                                                                                 where="USA" if c == "United States" else c)),
                       "himalayas": lambda: each(lambda c: fetch_himalayas(big_terms, country=COUNTRIES[c][0].upper())),
+                      "usajobs": lambda: fetch_usajobs(big_terms),
+                      "reed": lambda: fetch_reed(big_terms), "arbeitsagentur": lambda: fetch_arbeitsagentur(big_terms),
+                      "jobtech": lambda: fetch_jobtech(big_terms), "francetravail": lambda: fetch_francetravail(big_terms),
+                      "findwork": lambda: fetch_findwork(terms),
                       "wwr": fetch_wwr,
                       "remotive": lambda: fetch_remotive(terms), "themuse": fetch_themuse,
                       "arbeitnow": fetch_arbeitnow, "remoteok": fetch_remoteok, "jobicy": fetch_jobicy}

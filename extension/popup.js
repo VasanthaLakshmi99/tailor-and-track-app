@@ -62,6 +62,16 @@ function showMatch(r) {
     fit.textContent = r.fit ? `✓ Role fits: ${r.fit}` : "⚠ Job title doesn't match this profile's target roles";
     box.append(fit);
   }
+  if (r.exp_need != null) {                 // years of experience the JD asks for
+    const ex = document.createElement("div");
+    ex.className = r.exp_ok ? "fit ok" : "fit no exp";
+    const range = `${r.exp_min}–${r.exp_max >= 99 ? "any" : r.exp_max} yrs`;
+    ex.textContent = r.exp_ok
+      ? `✓ Experience fits: JD asks ${r.exp_need}+ years (your range ${range})`
+      : `⚠ Experience out of range: JD asks ${r.exp_need}+ years, ${who} has ` +
+        `${r.exp_have != null ? r.exp_have + " years" : "?"} (range ${range})`;
+    box.append(ex);
+  }
   if (r.missing && r.missing.length) {
     const miss = document.createElement("div");
     miss.className = "miss";
@@ -83,7 +93,8 @@ async function check() {
     showMatch(r);
     if (!j.company || !j.title) return setStatus("error", "Fill in company name and role title");
     if (!j.url) return setStatus("error", problem || "Add the job's own link (not the search page link)");
-    if (r.level === "new") setStatus("new", LABELS.new);
+    if (r.level === "new" && r.exp_ok === false) setStatus("warning", `🟡 New job, but the JD asks ${r.exp_need}+ years of experience`);
+    else if (r.level === "new") setStatus("new", LABELS.new);
     else setStatus(r.level, (LABELS[r.level] || "") + r.message);
   } catch (e) {
     setStatus("error", "Tailor&Track app is not running. Start it: streamlit run app.py");
@@ -125,7 +136,7 @@ const NAMES = { first_name: "first name", last_name: "last name", full_name: "na
   linkedin: "LinkedIn", github: "GitHub", website: "website", city: "city", state: "state", zip: "ZIP", country: "country",
   address: "address", location: "location", current_company: "company", current_title: "title", years: "years",
   work_auth: "work authorization", sponsorship: "sponsorship", relocate: "relocation", salary: "salary",
-  notice: "start date", visa: "visa" };
+  notice: "start date", visa: "visa", phone_type: "phone type" };
 $("fill").addEventListener("click", async () => {
   const msg = $("fillmsg");
   msg.style.display = "block";
@@ -142,14 +153,16 @@ $("fill").addEventListener("click", async () => {
     });
     const filled = [...new Set(out.flatMap((o) => (o && o.result && o.result.filled) || []))];
     const attached = out.some((o) => o && o.result && o.result.attached);
+    const empty = [...new Set(out.flatMap((o) => (o && o.result && o.result.empty) || []))];
+    const todo = empty.length ? ` Still empty, answer yourself: ${empty.join("; ")}.` : "";
     if (!filled.length && !attached) {
-      msg.textContent = "No empty form fields found here. Open the application form (click Apply on the job page), then try again. " +
-        "Add more answers in Tailor&Track → Profiles → ✍️ Application form answers.";
+      msg.textContent = "Nothing to fill on this screen. Open the application form (click Apply on the job page), " +
+        "then click Fill again. On forms with several steps, click Fill on each step." + todo;
       return;
     }
     msg.textContent = `✓ Filled ${filled.length}: ${filled.map((k) => NAMES[k] || k).join(", ")}` +
       (attached ? ` · attached ${r.resume_kind} resume ${r.resume_name}` : (resume ? " · attach the resume yourself" : "")) +
-      ". Blue boxes = filled. Check every answer, then click Submit yourself.";
+      ". Blue boxes = filled. Check every answer, then click Next / Submit yourself." + todo;
   } catch (e) {
     msg.textContent = "Can't fill this page (the app is not running, or the site blocks extensions).";
   }

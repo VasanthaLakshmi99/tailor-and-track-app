@@ -6,7 +6,7 @@ Back it up by copying that file.
 Every job belongs to a PROFILE (one candidate). Duplicates are checked per
 profile, so applying for candidate A never blocks candidate B.
 """
-VERSION = "2026-11-01a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
 import difflib
 import io
 import json
