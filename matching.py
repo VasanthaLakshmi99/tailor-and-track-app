@@ -11,7 +11,7 @@ Different spellings count as the same skill: "k8s" = "Kubernetes",
 "Amazon Web Services" = "AWS", "CI/CD" = "continuous integration", etc.
 This is an estimate to sort jobs - not an employer's ATS score.
 """
-VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
 import re
 
 # canonical name: other spellings
@@ -93,6 +93,57 @@ SKILLS.update({
 })
 AMBIGUOUS |= {"excel", "routing", "switching", "lightning", "express", "bootstrap", "statistics", "soc"}
 
+TECH_NAMES = set(SKILLS)        # everything above is technology; below are business / HR / operations skills
+
+# business, HR, workforce, recruiting, operations, finance and management skills (non-tech profiles)
+BUSINESS_SKILLS = {
+    # workforce planning and resourcing
+    "Workforce Planning": ["strategic workforce planning", "workforce plan", "workforce plans"],
+    "Workforce Management": ["wfm"], "Capacity Planning": ["capacity management"],
+    "Resource Management": ["resourcing", "resource managers"], "Resource Planning": ["resource allocation"],
+    "Demand Planning": ["demand forecasting", "demand management", "demand and supply"],
+    "Supply Planning": ["supply forecasting"], "Headcount Planning": ["headcount"],
+    "Forecasting": ["forecasts", "forecast"], "Rostering": ["roster", "rosters", "rota", "rotas", "shift patterns"],
+    "Scheduling": ["shift scheduling", "workforce scheduling"],
+    "Utilisation": ["utilization", "bench management"], "Internal Mobility": ["redeployment", "internal talent marketplace"],
+    "Talent Supply Chain": [], "Staffing": ["staffing operations"], "Global Mobility": ["work permits", "immigration"],
+    "Workforce Analytics": ["people analytics", "hr analytics"], "KPI Reporting": ["kpis", "kpi", "key performance indicators"],
+    "Management Information": ["mi reporting", "mi reports"], "Dashboards": ["scorecards", "dashboard"],
+    # recruiting
+    "Recruitment": ["recruiting", "talent acquisition"], "End-to-End Recruitment": ["full cycle recruitment", "full-cycle recruitment", "360 recruitment", "360 recruiter"],
+    "Candidate Sourcing": ["sourcing", "headhunting", "talent sourcing"], "Business Development": ["new business", "lead generation"],
+    "Account Management": ["client management", "client relationships", "key accounts"], "Billings": ["billing targets", "fee targets"],
+    "Sales": ["sales targets", "revenue targets"], "Applicant Tracking System": ["ats", "bullhorn", "greenhouse"],
+    "Employer Branding": [], "Interviewing": ["competency-based interviews", "interviews"], "Onboarding": ["induction"],
+    "Vendor Management": ["supplier management", "msp", "rpo"], "Contract Management": [],
+    # HR
+    "HR Business Partnering": ["hrbp", "hr business partner", "business partnering"], "Employee Relations": ["er casework", "er cases"],
+    "Employment Law": ["uk employment law", "tupe"], "Performance Management": [], "Talent Management": ["succession planning"],
+    "Learning and Development": ["l&d", "training and development"], "Compensation and Benefits": ["reward", "c&b", "benefits"],
+    "Payroll": [], "HR Policies": ["policy development", "hr policy"], "Organisational Design": ["organizational design", "org design"],
+    "Change Management": ["organisational change", "organizational change", "transformation"],
+    "Absence Management": ["sickness absence"], "Disciplinary and Grievance": ["grievance", "disciplinary"],
+    "Employee Engagement": [], "Diversity and Inclusion": ["dei", "equality diversity and inclusion", "ed&i"],
+    "CIPD": [], "HRIS": ["hr systems", "hr system", "human resources information system"],
+    "Workday": [], "SuccessFactors": ["sap successfactors"], "PeopleSoft": ["peoplesoft hcm"], "Oracle HCM": [],
+    "BambooHR": [], "Cornerstone": [],
+    # operations / management
+    "Stakeholder Engagement": ["stakeholder relationships", "stakeholders"], "Team Leadership": ["people management", "line management", "team management", "managing a team"],
+    "Coaching": ["mentoring"], "Budget Management": ["budgets", "budgeting", "p&l"], "Process Improvement": ["continuous improvement", "lean", "six sigma"],
+    "Operations Management": [], "Service Delivery": [], "SLA Management": ["slas", "service level agreements"],
+    "Compliance": ["regulatory compliance", "audit"], "Risk Management": [], "Health and Safety": ["h&s", "iosh", "nebosh"],
+    "Working Time Regulations": ["working time directive"], "Union Consultation": ["trade unions", "collective bargaining"],
+    "Microsoft Office": ["ms office", "office 365", "microsoft 365"], "Data-Driven Decisions": ["data-driven"],
+    "PRINCE2": [], "Programme Management": ["program management"], "Customer Service": [], "Contact Centre": ["call centre", "contact center", "call center"],
+}
+SKILLS.update(BUSINESS_SKILLS)
+AMBIGUOUS |= {"forecast", "roster", "reward", "benefits", "sales", "interviews", "audit", "induction", "stakeholders",
+              "headcount", "resourcing", "transformation", "lean", "budgets", "dashboard", "staffing", "immigration",
+              "kpi", "msp", "ats", "greenhouse", "bullhorn"}
+# tech words that mean something else in a business JD ("networking" = meeting people, "pipeline" = candidates)
+TECH_WORDY = {"Networking", "Docker", "Bash", "Observability", "ELB", "Security", "High Availability", "Git", "Oracle",
+              "REST API", "SRE", "Machine Learning", "Statistics", "Routing", "Switching", "Lightning", "Express"}
+
 # soft words that are not real skills even if they appear in a resume's skills list
 SOFT = {"communication", "communication skills", "teamwork", "team player", "leadership", "problem solving",
         "time management", "hard working", "adaptability", "collaboration", "critical thinking", "english",
@@ -114,6 +165,18 @@ SECTION_END = re.compile(r"^(professional |work )?(experience|employment|educati
                          r"summary|profile|achievements|awards|languages|interests|declaration|personal)\b", re.I)
 
 
+GEO_WORDS = {"uk", "us", "usa", "eu", "emea", "apac", "amer", "latam", "india", "europe", "central europe", "asia",
+             "london", "global", "international", "remote", "onsite", "hybrid", "north america", "middle east",
+             "united kingdom", "united states", "germany", "france", "ireland", "canada", "australia", "singapore", "uae"}
+GENERIC_WORDS = {"demand", "delivery", "planning", "reporting", "learning", "analytics", "operations", "development",
+                 "leadership", "management", "strategy", "business", "people", "teams", "team", "clients", "client",
+                 "data", "process", "processes", "domain", "projects", "project", "support", "service", "services",
+                 "visa", "visas", "travel", "office", "experience", "knowledge", "work", "role", "roles"}
+_ADJ = {"advanced", "intermediate", "beginner", "expert", "proficient", "fluent", "native", "reduction", "capacity",
+        "improvement", "excellence", "awareness", "exposure", "familiarity", "practices", "decisions"}
+_SKIP_SKILL_LINES = re.compile(r"^(languages?|awards?|honou?rs|interests|hobbies|references|domain|industries)\b", re.I)
+
+
 def learn_skills(resume_text):
     """Skills written in the resume's own Skills section, e.g. 'Tools: Jira, Zephyr, qTest'.
     Lets every profile be scored on its own skills, whatever the role."""
@@ -127,7 +190,7 @@ def learn_skills(resume_text):
             s = re.sub(r"^[^:]*skills[^:]*:?|^[^:]*(competencies|tools|technologies|tech stack)[^:]*:?", "", s, flags=re.I)
         elif inside and SECTION_END.match(s) and len(s) < 40 and ":" not in s:
             inside = False
-        if not inside:
+        if not inside or _SKIP_SKILL_LINES.match(s):
             continue
         if ":" in s:                       # "Cloud: AWS, Azure" -> "AWS, Azure"
             s = s.split(":", 1)[1]
@@ -135,8 +198,10 @@ def learn_skills(resume_text):
         for item in re.split(r"[,;|•●▪·]|\s{2,}|\band\b", s):
             item = re.sub(r"\(.*?\)", "", item).strip(" .-–")
             low = item.lower()
-            if 2 <= len(item) <= 30 and len(item.split()) <= 3 and not low.isdigit() \
-                    and low not in SOFT and low not in _KNOWN and re.search(r"[a-z]", low):
+            if 2 <= len(item) <= 30 and len(item.split()) <= 3 and not low.isdigit() and not re.match(r"\d", low) \
+                    and low not in SOFT and low not in _KNOWN and low not in GEO_WORDS and low not in GENERIC_WORDS \
+                    and not (" " not in item and item.islower() and (len(item) < 9 or low in _ADJ)) \
+                    and re.search(r"[a-z]", low):
                 out.append(item)
     return sorted(set(out), key=str.lower)
 
@@ -156,17 +221,41 @@ def find_skills(text, strict=False, extra=()):
     return found
 
 
-def score(jd, resume_text):
-    """Returns (percent_int, matched_list, missing_list): how many of the JD's hard-skill keywords
-    (dictionary skills + common ATS phrases + tool names in the requirements) the resume has."""
+def score(jd, resume_text, title="", roles=()):
+    """Returns (percent_int, matched_list, missing_list).
+    Skills part: how many of the JD's hard-skill keywords (dictionary skills + common ATS phrases + tool names in
+    the requirements) the resume has. With a job title it also checks the job's function: 75% skills + 25% title
+    (the same keywords appear in very different jobs, e.g. 'recruitment' for a recruiter and for a workforce planner)."""
     if not (jd or "").strip() or not (resume_text or "").strip():
         return 0, [], []
     hard = [k for k in jd_keywords(jd, resume_text) if k[3] == "hard"]
     if not hard:
-        return _dictionary_score(jd, resume_text)
-    matched = [k for k in hard if has_keyword(resume_text, k[0], k[1])]
-    pct = round(100 * sum(k[2] for k in matched) / sum(k[2] for k in hard))
-    return pct, [k[0] for k in matched], [k[0] for k in hard if k not in matched]
+        pct, matched, missing = _dictionary_score(jd, resume_text)
+    else:
+        matched_k = [k for k in hard if has_keyword(resume_text, k[0], k[1])]
+        pct = round(100 * sum(k[2] for k in matched_k) / sum(k[2] for k in hard))
+        if len(hard) < 4:                                   # too few keywords to be sure: don't promise 100%
+            pct = min(pct, 60 + 10 * len(hard))
+        matched, missing = [k[0] for k in matched_k], [k[0] for k in hard if k not in matched_k]
+    if title:
+        pct = round(0.75 * pct + 0.25 * title_score(title, resume_text, roles))
+    return pct, matched, missing
+
+
+def title_score(title, resume_text, roles=()):
+    """0-100: how close the job title is to the candidate's roles (target roles, resume headline, past job titles)."""
+    if title_fit(title, roles):
+        return 100
+    t = set(_title_words(title)) - {"manager", "engineer", "specialist", "executive", "officer", "consultant",
+                                    "analyst", "partner", "advisor", "coordinator", "assistant", "director"}
+    if not t:
+        return 50
+    head = (resume_text or "")[:400]
+    own = set(_title_words(" ".join(roles or ()) + " " + head))
+    for line in (resume_text or "").splitlines():            # past job titles: lines with dates
+        if re.search(r"(19|20)\d{2}\s*[–—-]", line) or re.search(r"[—–|].*(manager|executive|engineer|lead|analyst)", line, re.I):
+            own |= set(_title_words(line))
+    return round(100 * len(t & own) / len(t))
 
 
 def _dictionary_score(jd, resume_text):
@@ -338,8 +427,12 @@ def roles_from_resume(resume_text, limit=14):
 
 # ---------------------------------------------------------------- years of experience a JD asks for
 _YEARS = re.compile(r"(?:minimum of|min\.?|at least|over)?\s*(\d{1,2})\s*(?:\+|plus)?\s*(?:(?:-|–|to)\s*(\d{1,2})\s*)?\+?\s*"
-                    r"(?:years?|yrs?)\b(.{0,60})", re.I)
+                    r"(?:years?|yrs?)\b(?=(.{0,60}))", re.I)
+_NUMS = {w: i for i, w in enumerate("zero one two three four five six seven eight nine ten eleven twelve thirteen "
+                                    "fourteen fifteen".split())}
+_WORD_NUM = re.compile(r"\b(" + "|".join(list(_NUMS)[1:]) + r")(?=\s*\+?\s*(?:\(\d+\)\s*)?(?:years?|yrs?)\b)", re.I)
 _EXP_CONTEXT = re.compile(r"experience|exp\b|professional|industry|hands-on|working|work in|background|relevant|"
+                          r"similar role|in a similar|in the field|in a .{0,25}role|post-qualification|track record|"
                           r"in (?:devops|cloud|software|it|sre|engineering)|of (?:devops|cloud|software|it|sre|engineering)", re.I)
 _NOT_EXP = re.compile(r"old|founded|history|in business|anniversary|warranty|award|clearance|citizen|degree", re.I)
 
@@ -348,9 +441,10 @@ def jd_years(jd):
     """Years of experience the JD asks for (the highest minimum it mentions), or None if it doesn't say.
     '5+ years of experience' -> 5, '3-5 years' -> 3, 'minimum of 7 years of IT experience' -> 7."""
     best = None
+    jd = _WORD_NUM.sub(lambda w: str(_NUMS[w.group(1).lower()]), jd or "")    # "seven years" -> "7 years"
     for m in _YEARS.finditer(jd or ""):
         low, tail = int(m.group(1)), m.group(3) or ""
-        before = (jd or "")[max(0, m.start() - 40):m.start()]
+        before = re.split(r"[.!?\n]", (jd or "")[max(0, m.start() - 40):m.start()])[-1]   # same sentence only
         if low > 20 or _NOT_EXP.search(tail[:30]) or _NOT_EXP.search(before):
             continue
         if not (_EXP_CONTEXT.search(tail) or _EXP_CONTEXT.search(before)):
@@ -396,6 +490,17 @@ _NOISE = {"services", "service", "management", "support", "systems", "system", "
           "development", "software", "technology", "data", "cloud", "infrastructure", "performance", "security"}
 
 
+def is_tech(text):
+    """True if the text is about technology work (a few real tech tools, not just 'networking')."""
+    low = (text or "").lower()
+    hits = {n for n in TECH_NAMES - TECH_WORDY for p in _STRICT.get(n, []) if p.search(low)}
+    return len(hits) >= 3
+
+
+BUSINESS_EXTRA = {"capacity planning", "change management", "compliance", "documentation", "mentoring",
+                  "best practices", "release management"}
+
+
 def jd_keywords(jd, resume_text="", company=""):
     """ATS keywords of a JD, most important first: [(display, key, weight, kind)] with kind 'hard' or 'soft'.
     Uses the skills dictionary, the resume's own Skills list, common ATS phrases and tool names in the requirements."""
@@ -415,16 +520,23 @@ def jd_keywords(jd, resume_text="", company=""):
                 return jd[m.start():m.end()]
         return default
 
+    tech = is_tech(jd)
     items = []
     for name, n in find_skills(jd, strict=True, extra=extra).items():
+        if not tech and name in TECH_WORDY:
+            continue                     # "networking" in a recruiter JD is not TCP/IP
+        if name.lower() in GEO_WORDS or name.lower() in GENERIC_WORDS:
+            continue
         pats = [_pattern(a) for a in [name] + SKILLS.get(name, []) if a.lower() not in AMBIGUOUS] or [_pattern(name)]
         items.append((spelled(pats, name), name.lower(), min(n, 3), "hard", first_pos(pats)))
     for t, p in _EXTRA_PATTERNS.items():
+        if not tech and t not in BUSINESS_EXTRA:
+            continue                     # "automation", "deployment", "testing" … mean other things outside tech
         n = len(p.findall(low))
         if n:
             items.append((spelled([p], t), t, min(n, 3), "hard", first_pos([p])))
     company_words = {w for w in re.split(r"\W+", (company or "").lower()) if w}
-    for line in jd.splitlines() or [jd]:
+    for line in (jd.splitlines() or [jd]) if tech else []:     # unknown tool names: only in tech JDs (not "LCY")
         if not _REQ_LINE.search(line):
             continue
         for m in _CAPS.finditer(line):
@@ -441,7 +553,8 @@ def jd_keywords(jd, resume_text="", company=""):
             items.append((spelled([p], t), t, 1, "soft", first_pos([p])))
     keys = {i[1] for i in items}
     for disp, key, w, kind, pos in sorted(items, key=lambda i: (i[3] != "hard", -i[2], i[4])):
-        if key in seen or key in _NOISE or key in company_words or (company and key in company.lower()):
+        if key in seen or key in _NOISE or key in company_words or (company and key in company.lower()) \
+                or key in GEO_WORDS or key in GENERIC_WORDS:
             continue
         if " " not in key and any(key != k and re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", k) for k in keys):
             continue                     # "automation" when "automation testing" is there too

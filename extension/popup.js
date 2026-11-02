@@ -62,15 +62,26 @@ function showMatch(r) {
     fit.textContent = r.fit ? `✓ Role fits: ${r.fit}` : "⚠ Job title doesn't match this profile's target roles";
     box.append(fit);
   }
+  if (r.exp_need == null && $("jd").value.trim().length > 200) {
+    const ex = document.createElement("div");
+    ex.className = "fit";
+    ex.textContent = "🎓 JD doesn't say how many years of experience";
+    box.append(ex);
+  }
   if (r.exp_need != null) {                 // years of experience the JD asks for
     const ex = document.createElement("div");
-    ex.className = r.exp_ok ? "fit ok" : "fit no exp";
-    const range = `${r.exp_min}–${r.exp_max >= 99 ? "any" : r.exp_max} yrs`;
-    ex.textContent = r.exp_ok
-      ? `✓ Experience fits: JD asks ${r.exp_need}+ years (your range ${range})`
-      : `⚠ Experience out of range: JD asks ${r.exp_need}+ years, ${who} has ` +
-        `${r.exp_have != null ? r.exp_have + " years" : "?"} (range ${range})`;
+    ex.className = r.exp_ok ? "fit ok" : "fit no";
+    const have = r.exp_have != null ? `${who} has ${r.exp_have} years` : "";
+    ex.textContent = `🎓 JD asks ${r.exp_need}+ years of experience` + (have ? ` · ${have}` : "") +
+      (r.exp_ok ? " ✓" : ` · outside the ${r.exp_min}–${r.exp_max >= 99 ? "any" : r.exp_max} yrs range (you can still save)`);
     box.append(ex);
+  }
+  if (r.visa) {                             // visa sponsorship (Profiles → Needs visa sponsorship for)
+    const v = document.createElement("div");
+    v.className = "fit " + (r.visa.level === "yes" ? "ok" : r.visa.level === "no" ? "no exp" : "no");
+    v.textContent = "🛂 " + r.visa.label +
+      (r.visa.need && r.visa.need.length && !r.visa.register_loaded ? " (UK sponsor list still downloading)" : "");
+    box.append(v);
   }
   if (r.missing && r.missing.length) {
     const miss = document.createElement("div");
@@ -93,8 +104,7 @@ async function check() {
     showMatch(r);
     if (!j.company || !j.title) return setStatus("error", "Fill in company name and role title");
     if (!j.url) return setStatus("error", problem || "Add the job's own link (not the search page link)");
-    if (r.level === "new" && r.exp_ok === false) setStatus("warning", `🟡 New job, but the JD asks ${r.exp_need}+ years of experience`);
-    else if (r.level === "new") setStatus("new", LABELS.new);
+    if (r.level === "new") setStatus("new", LABELS.new);      // experience never blocks saving: it is shown below
     else setStatus(r.level, (LABELS[r.level] || "") + r.message);
   } catch (e) {
     setStatus("error", "Tailor&Track app is not running. Start it: streamlit run app.py");

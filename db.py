@@ -6,7 +6,7 @@ Back it up by copying that file.
 Every job belongs to a PROFILE (one candidate). Duplicates are checked per
 profile, so applying for candidate A never blocks candidate B.
 """
-VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
 import difflib
 import io
 import json
@@ -104,6 +104,13 @@ def init_db():
                 con.execute("UPDATE jobs SET company_norm=?, title_norm=? WHERE id=?",
                             (norm_company(r["company"]), norm_title(r["title"]), r["id"]))
             con.execute("INSERT OR REPLACE INTO settings VALUES('norm_version', '2')")
+        if con.execute("SELECT value FROM settings WHERE key='extract_version'").fetchone() is None:
+            for r in con.execute("SELECT id, filename, data FROM profiles WHERE data IS NOT NULL").fetchall():
+                try:                                            # read saved master resumes again, in page order
+                    con.execute("UPDATE profiles SET text=? WHERE id=?", (extract_text(r["filename"] or "r.pdf", r["data"]), r["id"]))
+                except Exception:
+                    pass
+            con.execute("INSERT OR REPLACE INTO settings VALUES('extract_version', '2')")
         for col, kind in (("ats_after", "INTEGER"), ("ats_json", "TEXT")):   # ATS check of the tailored resume
             if col not in _columns(con, "jobs"):
                 con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
@@ -202,7 +209,14 @@ def extract_text(filename, data):
     name = filename.lower()
     if name.endswith(".pdf"):
         from pypdf import PdfReader
-        return "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(data)).pages)
+        pages = PdfReader(io.BytesIO(data)).pages
+        try:        # layout mode keeps the page order (name and contact on top, dates next to the job)
+            text = "\n".join((p.extract_text(extraction_mode="layout") or "") for p in pages)
+            text = "\n".join(re.sub(r"(\S) {3,}(?=\S)", r"\1  ", ln).strip() for ln in text.splitlines())
+            text = re.sub(r"\n{3,}", "\n\n", text).strip()
+        except Exception:
+            text = ""
+        return text if len(text) > 50 else "\n".join((p.extract_text() or "") for p in pages)
     if name.endswith(".docx"):
         import docx
         d = docx.Document(io.BytesIO(data))
@@ -258,16 +272,17 @@ def match_for(pid, jd, title=""):
     """Match % + missing skills + which target role the title fits."""
     p = profile(pid)
     text = scoring_text(p)
-    pct, _, missing = matching.score(jd or "", text)
+    pct, _, missing = matching.score(jd or "", text, title, roles_for_search(p))
     return {"match": pct if text else None, "missing": missing,
             "fit": matching.title_fit(title, roles_for_search(p)), "has_roles": bool(roles_for_search(p))}
 
 
 def rescore(pid):
-    text = scoring_text(profile(pid))
+    p = profile(pid)
+    text, roles = scoring_text(p), roles_for_search(p)
     with connect() as con:
-        for r in con.execute("SELECT id, jd FROM jobs WHERE profile_id=?", (pid,)).fetchall():
-            pct, _, missing = matching.score(r["jd"] or "", text)
+        for r in con.execute("SELECT id, jd, title FROM jobs WHERE profile_id=?", (pid,)).fetchall():
+            pct, _, missing = matching.score(r["jd"] or "", text, r["title"] or "", roles)
             con.execute("UPDATE jobs SET match=?, missing=? WHERE id=?", (pct, json.dumps(missing), r["id"]))
 
 

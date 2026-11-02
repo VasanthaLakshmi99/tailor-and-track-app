@@ -1,5 +1,5 @@
 """Excel report (and ZIP of resumes) for a candidate, for any period."""
-VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
 import io
 import zipfile
 from datetime import datetime, timedelta

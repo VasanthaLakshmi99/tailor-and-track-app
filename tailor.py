@@ -6,7 +6,7 @@
 - save_tailored(): stores the uploaded resume as Company_Role.pdf, checks its new
   match % and remembers it for the job (used later in Apply & Track and the report).
 """
-VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
 import json
 import re
 
@@ -60,7 +60,7 @@ def save_tailored(job, filename, data):
     path = folder / file_name(job, ext)
     path.write_bytes(data)
     text = db.extract_text(filename, data)
-    pct, _, missing = matching.score(job.get("jd") or "", text)
+    pct, _, missing = matching.score(job.get("jd") or "", text, job.get("title") or "", db.roles_for_search(profile) if profile else ())
     rep = matching.ats_report(job.get("jd") or "", text, job.get("title") or "", job.get("company") or "")
     with db.connect() as con:
         con.execute("UPDATE jobs SET resume_file=?, tailored_match=?, tailor_status='done', tailor_note=NULL, "
@@ -82,7 +82,7 @@ def auto_tailor(job, ticked=(), remember=True):
         raise ValueError("Upload the master resume first")
     if not (job.get("jd") or "").strip():
         raise ValueError("This job has no JD yet. Open it and click the J button first")
-    data = autotailor.to_pdf(autotailor.tailor(job, resume, confirmed))
+    data = autotailor.to_pdf(autotailor.tailor(job, resume, confirmed, roles=db.roles_for_search(profile)))
     return save_tailored(job, "auto.pdf", data)
 
 

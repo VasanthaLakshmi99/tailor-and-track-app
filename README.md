@@ -6,6 +6,7 @@ A free job-search helper that runs on your own laptop. It:
 - **blocks duplicates**, so you never apply to the same job twice
 - shows a **match %** for every job against your resume
 - **tailors your resume** for each job automatically (PDF, in your master resume's layout)
+- **checks visa sponsorship**: UK jobs against the Home Office register of licensed sponsors, and what every JD says
 - **checks the ATS score** of every resume against the JD (hard skills, job title, soft skills, experience, education, format)
 - **tracks applications** and makes **Excel reports** for any dates you pick
 - **fills application forms** (name, email, phone, LinkedIn, work authorization, resume upload…) with the J button. You check and submit.
@@ -56,6 +57,13 @@ The app must be running for the J button to work.
 5. **Profiles → ✍️ Application form answers:** save them once. On an application page click **J → ✍️ Fill application form**.
 6. **Apply & track:** open each job, apply, and tick **Applied ✓**. Download the Excel report at the bottom (pick **Custom dates…** for any period).
    **🧹 Duplicate jobs** at the bottom removes jobs saved twice.
+
+### Visa sponsorship
+In **Profiles**, fill **Needs visa sponsorship for** (e.g. `United Kingdom`). Then:
+- every job shows ✅ licensed sponsor / JD offers sponsorship, ❌ JD says no, ⚠️ not on the UK register, ❔ not mentioned
+- the J button shows the same line
+- automatic collection skips jobs whose JD says "no sponsorship" (and, with **Collect only from visa sponsors**, UK companies that are not licensed sponsors)
+The UK register (about 120,000 employers) is downloaded free from GOV.UK once a week.
 
 ### Keep the laptop fast
 - **Profiles → 📁 Where tailored resumes are saved:** use a Google Drive / OneDrive folder with "Stream files" / "Files On-Demand".

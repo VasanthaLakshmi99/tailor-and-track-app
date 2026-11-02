@@ -11,14 +11,15 @@ import db
 import matching
 import collectors
 import report
+import sponsors
 import tailor
 import autotailor
 
 st.set_page_config(page_title="Tailor&Track", page_icon="🧵", layout="wide")
 
 # ---------------------------------------------------------------- are all files from the same update?
-VERSION = "2026-11-01c"
-_old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor)
+VERSION = "2026-11-02a"
+_old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor, sponsors)
         if getattr(m, "VERSION", None) != VERSION]
 if _old:
     st.error("Some Tailor&Track files are from an older update: **" + ", ".join(_old) + "**.  \n"
@@ -35,6 +36,8 @@ def start_receiver():
     status = api_server.start()
     if status == "running":   # only one copy of the app runs the daily collector
         collectors.start_daily()
+        if any(sponsors.needs_visa(p) for p in db.profiles()):
+            sponsors.refresh_in_background()      # UK register of licensed sponsors, once a week
     return status
 
 
@@ -83,7 +86,16 @@ def profile_banner():
         st.info(f"Add target roles for **{P['name']}** on the 👤 Profiles page, so you can see which jobs fit.")
     else:
         note = "" if db.role_list(P) else " (read from the resume)"
-        st.caption(f"👤 **{P['name']}** · resume: {P['filename']} · roles: {', '.join(roles)}{note}")
+        st.caption(f"👤 **{P['name']}** · resume: {P['filename']} · {roles_text(roles)}{note}")
+
+
+def roles_text(roles):
+    """Short line for many roles: 'roles: Workforce Planning Manager, Resource Manager, … +312 more'."""
+    if not roles:
+        return "no target roles yet"
+    if len(roles) <= 6:
+        return "roles: " + ", ".join(roles)
+    return f"{len(roles)} target roles: " + ", ".join(roles[:4]) + f" … +{len(roles) - 4} more"
 
 
 def master_resume_box():
@@ -136,10 +148,22 @@ def exp_filter(p, key):
                              help="Skip jobs that ask for less experience than this")
     hi_new = c2.number_input("to (yrs)", 0.0, 30.0, float(min(hi, 30.0)), 1.0, key=key + "_hi",
                              help="Skip jobs that ask for more experience than this. Jobs that don't say are kept.")
-    if (lo_new, hi_new) != (lo, min(hi, 30.0)):
+    slack = collectors.exp_slack(p)
+    slack_new = st.number_input("Also keep jobs asking up to this many years MORE", 0.0, 10.0, float(slack), 1.0,
+                                key=key + "_slack", help="e.g. range 0–15 and 2 here: a JD asking 17 years is still kept. "
+                                "The J button never blocks saving; it only shows the years the JD asks for.")
+    if (lo_new, hi_new) != (lo, min(hi, 30.0)) or slack_new != slack:
         db.set_setting(f"exp_min_{p['id']}", str(lo_new))
         db.set_setting(f"exp_max_{p['id']}", str(hi_new))
+        db.set_setting(f"exp_slack_{p['id']}", str(slack_new))
     return lo_new, hi_new
+
+
+def visa_cell(j):
+    v = sponsors.check(j.get("company"), j.get("jd") or "", j.get("location") or "")
+    return {"yes": "✅", "no": "❌" if v["jd"] == "no" else "⚠️", "maybe": "🟡"}.get(v["level"], "❔") + \
+        (" sponsor" if v["level"] == "yes" else " JD: no" if v["jd"] == "no" else " not on register"
+         if v["level"] == "no" else " other route" if v["level"] == "maybe" else "")
 
 
 def _ago(iso):
@@ -203,7 +227,7 @@ def few_jobs_help(last):
     if not found or saved >= 50:
         return
     with st.expander(f"📉 Why only {saved} new job(s)? {found} jobs were posted in the {_window_text()}"):
-        rows = [(k, tot.get(k, 0)) for k in ("not a resume role", "wrong level", "wrong location", "experience",
+        rows = [(k, tot.get(k, 0)) for k in ("not a resume role", "wrong level", "wrong location", "experience", "no visa sponsor",
                                               "low skills match", "already in Tailor&Track", "duplicate blocked")]
         st.dataframe(pd.DataFrame([r for r in rows if r[1]], columns=["Skipped because", "Jobs"]), hide_index=True)
         c1, c2, c3 = st.columns(3)
@@ -224,7 +248,7 @@ def few_jobs_help(last):
 
 
 REASON_COLS = ["jobs received", "posted recently", "not a resume role", "wrong level", "wrong location",
-               "experience", "low skills match", "already in Tailor&Track", "duplicate blocked", "saved"]
+               "experience", "no visa sponsor", "low skills match", "already in Tailor&Track", "duplicate blocked", "saved"]
 
 
 def last_run_details(last):
@@ -315,7 +339,7 @@ def collection_settings():
 
     all_boards = collectors.boards()
     st.markdown(f"**Company career boards ({len(all_boards)})**  \nPaste a company's careers page link. "
-                "Works with Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday, Oracle Cloud, Recruitee, BambooHR, Breezy HR "
+                "Works with Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday, Oracle Cloud, Personio, Teamtailor, Recruitee, BambooHR, Breezy HR "
                 "and Bullhorn (most staffing / recruiting agencies). All free, no key.")
     with st.form("add_board", clear_on_submit=True):
         c1, c2, c3 = st.columns([3, 2, 1], vertical_alignment="bottom")
@@ -477,9 +501,15 @@ def add_by_hand():
 def find_jobs_page():
     st.title("Find jobs")
     roles = db.roles_for_search(P)
-    source = "searching (from the resume)" if not db.role_list(P) else "searching"
-    st.caption(f"For **{P['name']}** · {source}: {', '.join(roles) if roles else 'upload the resume first'}"
-               + " · locations: " + (", ".join(collectors.locations_for(P)) or "anywhere"))
+    source = " (from the resume)" if not db.role_list(P) else ""
+    st.caption(f"For **{P['name']}** · {roles_text(roles)}{source} · locations: "
+               + (", ".join(collectors.locations_for(P)) or "anywhere"))
+    if len(roles) > 6:
+        with st.expander(f"🎯 Searches and all {len(roles)} target roles"):
+            st.markdown("**Searched as:** " + ", ".join(collectors.core_terms(roles, 12)))
+            st.caption("Every job title found is still checked against all target roles. "
+                       "Change the roles on the 👤 Profiles page.")
+            st.text(", ".join(roles))
     master_resume_box()
 
     if "last_save" in st.session_state:
@@ -519,7 +549,8 @@ def find_jobs_page():
         if h and abs(h - collectors.window_hours()) > 1e-9:
             db.set_setting("window_hours", str(h))
         d1, d2 = st.columns([3, 2], vertical_alignment="bottom")
-        with d1.popover(f"🎓 Experience {collectors.exp_range(P)[0]:g}–{collectors.exp_range(P)[1]:g} yrs", width="stretch"):
+        with d1.popover(f"🎓 Experience {collectors.exp_range(P)[0]:g}–{collectors.exp_range(P)[1]:g} yrs "
+                        f"(+{collectors.exp_slack(P):g})", width="stretch"):
             exp_filter(P, "exp_collect")
             st.caption(f"Resume: {matching.years_of_experience(P.get('text') or '') or '?'} years. Jobs whose JD asks for "
                        "years outside this range are skipped. Jobs that don't mention years are kept.")
@@ -583,6 +614,12 @@ def jobs_waiting_table():
         e1, e2 = st.columns(2)
         exp_lo = e1.number_input("Exp. from", 0, 30, 0, 1, key=f"wexp_lo_{PID}", help="Years the JD asks for")
         exp_hi = e2.number_input("to", 0, 30, 30, 1, key=f"wexp_hi_{PID}")
+    show_visa = bool(sponsors.needs_visa(P))
+    visa_only = visa_hide_no = False
+    if show_visa:
+        v = st.radio("Visa sponsorship", ["All jobs", "Hide ❌ / ⚠️", "Sponsors only ✅"], horizontal=True,
+                     key=f"visa_filter_{PID}", help=f"{P['name']} needs sponsorship for: {', '.join(sponsors.needs_visa(P))}")
+        visa_only, visa_hide_no = v.startswith("Sponsors"), v.startswith("Hide")
     for j in saved:
         j["need"] = matching.jd_years(j["jd"] or "")
     if show is not None:
@@ -603,6 +640,7 @@ def jobs_waiting_table():
         j["warning"] = j["warning"] or ""
         j["jd_short"] = " ".join((j["jd"] or "").split())[:400] or "— no JD yet: open the job and click J"
         j["exp"] = f"{j['need']}+ yrs" if j["need"] is not None else "—"
+        j["visa"] = visa_cell(j)
 
     with btn.popover("🗑 Delete low matches", width="stretch"):
         cutoff = st.slider("Delete jobs below this match %", 0, 100, 50, step=5)
@@ -614,7 +652,15 @@ def jobs_waiting_table():
             st.session_state["deleted_msg"] = f"Deleted {len(low)} low-match jobs."
             st.rerun()
 
-    cols = ["id", "company", "title", "fit", "match", "exp", "posted", "jd_short", "source", "apply_url"] + \
+    if visa_only:
+        saved = [j for j in saved if j["visa"].startswith(("✅", "🟡"))]
+    elif visa_hide_no:
+        saved = [j for j in saved if not j["visa"].startswith(("❌", "⚠"))]
+    if not saved:
+        st.info("No jobs match these filters.")
+        return
+    cols = ["id", "company", "title", "fit", "match", "exp"] + (["visa"] if show_visa else []) + \
+        ["posted", "jd_short", "source", "apply_url"] + \
         (["warning"] if any(j["warning"] for j in saved) else [])
     df = pd.DataFrame(saved)[cols]
     df.insert(0, "delete", False)
@@ -632,6 +678,9 @@ def jobs_waiting_table():
                                                     help="First lines of the job description. Read the full JD below the table."),
             "source": "Source",
             "exp": st.column_config.TextColumn("Exp.", width="small", help="Years of experience the JD asks for"),
+            "visa": st.column_config.TextColumn("Visa", width="small",
+                                               help="✅ licensed UK sponsor or the JD offers sponsorship · ❌ the JD says no · "
+                                                    "⚠️ not on the UK register · ❔ not mentioned"),
             "posted": st.column_config.TextColumn("Posted", width="small",
                                                   help="When the company posted it. 'saved …' = posting date unknown."),
             "apply_url": st.column_config.LinkColumn("Job", display_text="Open ↗", width="small"),
@@ -741,15 +790,38 @@ def profile_box(p, active):
                               placeholder="e.g. DevOps Engineer, Cloud Engineer, Site Reliability Engineer, Platform Engineer")
         locs = st.text_input("Locations for automatic collection (comma separated, blank = from the resume)",
                              p.get("locations") or "", placeholder="e.g. United States, Remote")
+        v1, v2 = st.columns([2, 1], vertical_alignment="bottom")
+        visa = v1.text_input("Needs visa sponsorship for (countries, comma separated)",
+                             db.setting(f"visa_need_{pid}"), placeholder="e.g. United Kingdom",
+                             help="Shows ✅ / ❌ visa sponsorship on every job and in the J button. For the UK it checks "
+                                  "the Home Office register of licensed sponsors (official, free).")
+        only_sp = v2.checkbox("Collect only from visa sponsors", db.setting(f"visa_only_{pid}") == "1",
+                              help="Automatic collection skips jobs whose JD says no sponsorship, and UK jobs from "
+                                   "companies that are not licensed sponsors.")
         confirmed = st.text_area("Extra skills the candidate confirmed (not written in the resume)",
                                  p.get("confirmed_skills") or "", height=70,
                                  help="Filled when you tick skills on the Tailor page. Used for match % and every tailored resume.")
         if st.form_submit_button("Save"):
             db.update_profile(pid, name or p["name"], roles, locs)
+            db.set_setting(f"visa_need_{pid}", visa.strip())
+            db.set_setting(f"visa_only_{pid}", "1" if only_sp else "0")
+            if visa.strip():
+                sponsors.refresh_in_background()
             db.set_confirmed_skills(pid, confirmed)
             db.rescore(pid)              # new match % and role fit for the saved jobs
             collectors.prune_waiting()   # removes collected jobs that no longer fit
             st.session_state["profile_msg"] = f"Saved {name or p['name']}."
+            st.rerun()
+
+    if sponsors.needs_visa(p):
+        n, upd = sponsors.count(), (db.setting("uk_sponsors_updated") or "")[:10]
+        s1, s2 = st.columns([3, 1], vertical_alignment="center")
+        s1.caption(f"🛂 UK register of licensed sponsors: **{n:,}** employer names" + (f", updated {upd}" if upd else "") +
+                   " (Home Office, refreshed weekly). Other countries: the app reads what the JD says about sponsorship.")
+        if s2.button("Update now", key=f"sp_upd_{pid}"):
+            with st.spinner("Downloading the register from GOV.UK…"):
+                rows, msg = sponsors.refresh(force=True)
+            st.session_state["profile_msg"] = f"UK sponsor register: {msg}."
             st.rerun()
 
     up = st.file_uploader(f"Master resume for {p['name']} (PDF or DOCX)", type=["pdf", "docx"], key=f"resume_{pid}")
@@ -1075,6 +1147,8 @@ def apply_page():
             "apply_url": j["apply_url"], "match": j["tailored_match"] or j["match"],
             "resume": api_server.resume_link(j),
             "source": j["source"], "saved": (j["saved_at"] or "")[:10], "applied_at": (j["applied_at"] or "")[:16],
+            "exp": (lambda n: f"{n}+ yrs" if n is not None else "—")(matching.jd_years(j["jd"] or "")),
+            **({"visa": visa_cell(j)} if sponsors.needs_visa(P) else {}),
             "jd": (j["jd"] or "")[:300].replace("\n", " "),
         } for j in data])
         edited = st.data_editor(
@@ -1091,6 +1165,8 @@ def apply_page():
                 "resume": st.column_config.LinkColumn("Resume (click to download)", width="medium",
                                                       display_text=r"/resume/\d+/([^?]+)\?"),
                 "source": "Source", "saved": "Saved", "applied_at": "Applied on",
+                "exp": st.column_config.TextColumn("Exp.", width="small", help="Years of experience the JD asks for"),
+                "visa": st.column_config.TextColumn("Visa", width="small"),
             })
         changed = edited[edited["applied"] != df["applied"]]
         if len(changed):

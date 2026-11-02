@@ -12,7 +12,7 @@ automatic collection and it can get accounts blocked. Use the J button there.
 Each job is kept for a profile only if its title fits the profile's target roles and
 (if set) its locations. Every job goes through the normal duplicate check.
 """
-VERSION = "2026-11-01c"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
 import html
 import json
 import re
@@ -64,13 +64,39 @@ def exp_range(p):
     return num("exp_min", 0.0), num("exp_max", float(years + 2) if years is not None else 99.0)
 
 
+def visa_ok(job, p):
+    """False when the profile needs sponsorship in the job's country and the JD says no sponsorship
+    (or, with 'Collect only from visa sponsors', the UK company is not a licensed sponsor)."""
+    import sponsors
+    need = sponsors.needs_visa(p)
+    if not need:
+        return True
+    there = countries_in(job.get("location") or "")
+    if there and not ({country_name(n) or n for n in need} & there):
+        return True                                   # the job is in a country where no visa is needed
+    v = sponsors.check(job.get("company"), job.get("jd") or "", job.get("location") or "")
+    if v["jd"] == "no":
+        return False
+    if db.setting(f"visa_only_{p['id']}") == "1" and v["level"] == "no":
+        return False
+    return True
+
+
+def exp_slack(p):
+    """Extra years above the range that are still kept (a JD asking 1-2 years more is usually still worth applying)."""
+    try:
+        return float(db.setting(f"exp_slack_{(p or {}).get('id')}", "2") or 2)
+    except ValueError:
+        return 2.0
+
+
 def exp_ok(jd, p):
-    """True if the years the JD asks for are inside the profile's range (or the JD doesn't say)."""
+    """True if the years the JD asks for are inside the profile's range (+ slack), or the JD doesn't say."""
     need = matching.jd_years(jd or "")
     if need is None:
         return True
     lo, hi = exp_range(p)
-    return lo <= need <= hi
+    return lo <= need <= hi + exp_slack(p)
 _lock = threading.Lock()
 
 SUGGESTED = [  # well-known companies with public boards; Tailor&Track checks each one on the first collect
@@ -195,6 +221,36 @@ SUGGESTED = [  # well-known companies with public boards; Tailor&Track checks ea
     ("workday", "dowjones.wd1/Dow_Jones_Career", "Dow Jones"), ("workday", "warnerbros.wd5/global", "Warner Bros. Discovery"),
     ("workday", "kelloggs.wd1/Kellanova", "Kellanova"), ("workday", "generalmills.wd5/Careers", "General Mills"),
     ("workday", "dowjones.wd1/Dow_Jones_Career", "Dow Jones"),
+    # pack 4 (2026-11): UK employers, consultancies, outsourcing / contact-centre and agencies (UK + India hiring).
+    # Links are checked on the first collect; a wrong one is switched off automatically.
+    ("workday", "barclays.wd3/External_Career_Site_Barclays", "Barclays"), ("workday", "astrazeneca.wd3/Careers", "AstraZeneca"),
+    ("workday", "gsk.wd5/GSKCareers", "GSK"), ("workday", "vodafone.wd3/VodafoneCareers", "Vodafone"),
+    ("workday", "bt.wd3/BTCareers", "BT Group"), ("workday", "lbg.wd3/LBG_Careers", "Lloyds Banking Group"),
+    ("workday", "natwestgroup.wd3/NatWestGroup", "NatWest Group"), ("workday", "hsbc.wd3/External", "HSBC"),
+    ("workday", "rollsroyce.wd3/professional", "Rolls-Royce"), ("workday", "tesco.wd3/External_Careers", "Tesco"),
+    ("workday", "sainsburys.wd3/Sainsburys", "Sainsbury's"), ("workday", "ocado.wd3/OcadoGroup", "Ocado Group"),
+    ("workday", "capita.wd3/Capita_Careers", "Capita"), ("workday", "serco.wd3/Serco_Careers", "Serco"),
+    ("workday", "concentrix.wd5/External", "Concentrix"), ("workday", "ttec.wd5/TTEC_Careers", "TTEC"),
+    ("workday", "sodexo.wd3/Sodexo", "Sodexo"), ("workday", "mitie.wd3/Mitie", "Mitie"),
+    ("workday", "deloitteuk.wd3/DeloitteUK", "Deloitte UK"), ("workday", "ey.wd3/EY", "EY"),
+    ("workday", "aviva.wd1/External", "Aviva"), ("workday", "legalandgeneral.wd3/Careers", "Legal & General"),
+    ("workday", "baesystems.wd3/BAE_Systems_Careers", "BAE Systems"), ("workday", "network-rail.wd3/NR", "Network Rail"),
+    ("workday", "heathrow.wd3/Heathrow", "Heathrow"), ("workday", "britishairways.wd3/BA", "British Airways"),
+    ("workday", "easyjet.wd3/EasyJet", "easyJet"), ("workday", "nationalgrid.wd3/NationalGrid", "National Grid"),
+    ("workday", "centrica.wd3/Centrica", "Centrica"), ("workday", "hcltech.wd3/HCLTech", "HCLTech"),
+    ("workday", "cognizant.wd1/Cognizant_Careers", "Cognizant"), ("workday", "infosys.wd3/Infosys", "Infosys"),
+    ("workday", "techmahindra.wd3/TechM", "Tech Mahindra"), ("workday", "randstad.wd3/Randstad", "Randstad"),
+    ("workday", "adecco.wd3/Adecco", "Adecco"), ("workday", "manpowergroup.wd3/ManpowerGroup", "ManpowerGroup"),
+    ("workday", "roberthalf.wd1/RobertHalf", "Robert Half"), ("workday", "pagegroup.wd3/PageGroup", "PageGroup"),
+    ("greenhouse", "monzo", "Monzo"), ("greenhouse", "deliveroo", "Deliveroo"), ("greenhouse", "transferwise", "Wise"),
+    ("greenhouse", "checkoutcom", "Checkout.com"), ("greenhouse", "gocardless", "GoCardless"),
+    ("greenhouse", "skyscanner", "Skyscanner"), ("greenhouse", "thoughtmachine", "Thought Machine"),
+    ("greenhouse", "octopusenergy", "Octopus Energy"), ("greenhouse", "starlingbank", "Starling Bank"),
+    ("greenhouse", "darktrace", "Darktrace"), ("greenhouse", "cazoo", "Cazoo"), ("greenhouse", "bloomandwild", "Bloom & Wild"),
+    ("lever", "revolut", "Revolut"), ("lever", "cleo", "Cleo"), ("lever", "trainline", "Trainline"),
+    ("smartrecruiters", "ASOS", "ASOS"), ("smartrecruiters", "Hays", "Hays"), ("smartrecruiters", "Unilever", "Unilever"),
+    ("smartrecruiters", "Capgemini", "Capgemini"), ("smartrecruiters", "Ikea", "IKEA"),
+    ("teamtailor", "career.teamtailor.com", "Teamtailor"),
     # Oracle Cloud career sites (host/siteNumber)
     ("oracle", "jpmc.fa.oraclecloud.com/CX_1001", "JPMorgan Chase"), ("oracle", "eeho.fa.us2.oraclecloud.com/CX_45001", "Oracle"),
     # SmartRecruiters
@@ -268,6 +324,8 @@ PATTERNS = [
     ("bamboohr", r"([a-z0-9-]+)\.bamboohr\.com"),
     ("breezy", r"([a-z0-9-]+)\.breezy\.hr"),
     ("oracle", r"([a-z0-9-]+\.fa(?:\.[a-z0-9]+)?\.oraclecloud\.com)/hcmUI/CandidateExperience/[a-z-]+/sites/([A-Za-z0-9_]+)"),
+    ("personio", r"([a-z0-9-]+)\.jobs\.personio\.(?:de|com)"),
+    ("teamtailor", r"([a-z0-9-]+)\.teamtailor\.com"),
 ]
 _SKIP_TOKENS = {"embed", "jobs", "v1", "api", "job_board", "js", "www", "app", "help", "marketing"}
 
@@ -300,6 +358,8 @@ def discover(url):
         return hit
     from urllib.parse import urlparse
     root = "{0.scheme}://{0.netloc}".format(urlparse(r.url or url))
+    if "teamtailor" in (r.text or "").lower():               # Teamtailor career site on the company's own domain
+        return "teamtailor", urlparse(r.url or url).netloc
     try:                                                     # Bullhorn career portal (most staffing agencies)
         cfg = requests.get(f"{root}/app.json", headers=UA, timeout=15).json().get("service") or {}
         if cfg.get("corpToken") and cfg.get("swimlane"):
@@ -438,9 +498,32 @@ def fetch_workable(token, name):
     return out
 
 
+ROLE_NOUNS = {"manager", "lead", "head", "specialist", "executive", "director", "officer", "partner", "coordinator",
+              "consultant", "advisor", "adviser", "administrator", "associate", "analyst", "supervisor"}
+LEVELS = {"senior", "sr", "junior", "jr", "principal", "staff", "chief", "head", "lead", "strategic", "global", "regional", "director", "vp",
+          "enterprise", "associate", "assistant", "deputy", "group", "of", "the", "and", "&", "-", "/", "i", "ii", "iii"}
+
+
+def core_terms(roles, n=12):
+    """Many similar target roles -> a few broad searches.
+    'Senior Workforce Planning Manager', 'Workforce Planning Lead', 'Head of Workforce Planning' -> 'workforce planning';
+    'DevOps Engineer' stays 'devops engineer'. Job titles are still checked against every target role afterwards."""
+    out = []
+    for role in roles or []:
+        words = [w for w in re.sub(r"[^a-z0-9+#. ]+", " ", (role or "").lower()).split() if w not in LEVELS]
+        if len(words) > 2 and words[-1] in ROLE_NOUNS:
+            words = words[:-1]                                # "workforce planning manager" -> "workforce planning"
+        term = " ".join(words)
+        if term and term not in out and not any(o in term.split(" and ") for o in out):
+            out.append(term)
+        if len(out) >= n:
+            break
+    return out
+
+
 def _search_terms(n=4):
-    """Main roles of every profile, in order (used to search big company sites)."""
-    return list(dict.fromkeys(r for p in db.profiles() for r in db.roles_for_search(p)[:n]))
+    """Main search phrases of every profile (used to search big company sites)."""
+    return list(dict.fromkeys(t for p in db.profiles() for t in core_terms(db.roles_for_search(p), n)))
 
 
 def _workday_parts(token):
@@ -543,6 +626,52 @@ def fetch_recruitee(token, name):
                     "url": j.get("careers_url") or j.get("careers_apply_url", ""),
                     "jd": _text((j.get("description") or "") + "\n" + (j.get("requirements") or "")),
                     "posted": _when(j.get("published_at") or j.get("created_at")), "source": "Recruitee"})
+    return out
+
+
+def fetch_personio(token, name):
+    """Personio careers page (<company>.jobs.personio.de): the public XML feed. Free, no key."""
+    import xml.etree.ElementTree as ET
+    r = _get(f"https://{token}.jobs.personio.de/xml", params={"language": "en"})
+    if r.status_code == 404 or "<position" not in (r.text or "") and "workzag" not in (r.text or ""):
+        if r.status_code == 404:
+            raise LookupError("board not found")
+        return []
+    root = ET.fromstring(r.content)
+    out = []
+    for pos in root.iter("position"):
+        get = lambda tag: (pos.findtext(tag) or "").strip()
+        jd = "\n\n".join(_text(d.findtext("value") or "") for d in pos.iter("jobDescription"))
+        offices = [get("office")] + [o.text or "" for o in pos.iter("additionalOffice")]
+        out.append({"company": get("subcompany") or name, "title": get("name"),
+                    "location": "; ".join(o for o in offices if o), "url": f"https://{token}.jobs.personio.de/job/{get('id')}",
+                    "jd": jd, "posted": _when(get("createdAt")), "source": "Personio"})
+    return out
+
+
+def fetch_teamtailor(token, name):
+    """Teamtailor careers site (<company>.teamtailor.com or the company's own careers domain): public RSS. Free."""
+    import xml.etree.ElementTree as ET
+    from email.utils import parsedate_to_datetime
+    host = token if "." in token else f"{token}.teamtailor.com"
+    r = _get(f"https://{host}/jobs.rss", params={"per_page": 200})
+    if r.status_code == 404:
+        raise LookupError("board not found")
+    r.raise_for_status()
+    root = ET.fromstring(r.content)
+    out = []
+    for it in root.iter("item"):
+        places = [(e.text or "").strip() for e in it.iter() if e.tag.split("}")[-1] in ("city", "country", "location", "name")
+                  and e is not it and (e.text or "").strip() and e.tag.split("}")[-1] != "title"]
+        remote = next(((e.text or "") for e in it.iter() if e.tag.split("}")[-1] == "remoteStatus"), "")
+        try:
+            posted = parsedate_to_datetime(it.findtext("pubDate") or "")
+        except (TypeError, ValueError):
+            posted = None
+        loc = ", ".join(dict.fromkeys(places)) + (" (Remote)" if remote.strip().lower() in ("fully", "remote", "full", "fully_remote") else "")
+        out.append({"company": name, "title": (it.findtext("title") or "").strip(), "location": loc.strip(", "),
+                    "url": (it.findtext("link") or "").strip(), "jd": _text(it.findtext("description") or ""),
+                    "posted": posted, "source": "Teamtailor"})
     return out
 
 
@@ -730,14 +859,21 @@ def fetch_reed(search_terms):
     auth = (db.setting("reed_key"), "")
     out, seen = [], set()
     now = datetime.now(timezone.utc)
-    for term in search_terms:
+    pages = [(t, skip) for t in search_terms for skip in (0, 100, 200)]
+    done_terms = set()
+    for term, skip in pages:
+        if term in done_terms:
+            continue
         r = requests.get("https://www.reed.co.uk/api/1.0/search", auth=auth, headers=UA, timeout=30,
-                         params={"keywords": term, "resultsToTake": 100})
+                         params={"keywords": term, "resultsToTake": 100, "resultsToSkip": skip})
         if r.status_code in (401, 403):
             raise RuntimeError("API key not accepted: check the Reed key")
         if not r.ok:
             continue
-        for j in r.json().get("results") or []:
+        results = r.json().get("results") or []
+        if len(results) < 100:
+            done_terms.add(term)                              # no next page
+        for j in results:
             jid = j.get("jobId")
             if not jid or jid in seen:
                 continue
@@ -1102,11 +1238,12 @@ def fetch_jobicy():
 FETCHERS = {"greenhouse": fetch_greenhouse, "lever": fetch_lever, "ashby": fetch_ashby,
             "smartrecruiters": fetch_smartrecruiters, "workable": fetch_workable, "workday": fetch_workday,
             "bullhorn": fetch_bullhorn, "recruitee": fetch_recruitee, "bamboohr": fetch_bamboohr, "breezy": fetch_breezy,
-            "amazon": fetch_amazon, "microsoft": fetch_microsoft, "oracle": fetch_oracle}
+            "amazon": fetch_amazon, "microsoft": fetch_microsoft, "oracle": fetch_oracle,
+            "personio": fetch_personio, "teamtailor": fetch_teamtailor}
 SOURCE_NAME = {"greenhouse": "Greenhouse", "lever": "Lever", "ashby": "Ashby", "smartrecruiters": "SmartRecruiters",
                "workable": "Workable", "workday": "Workday", "bullhorn": "Bullhorn", "recruitee": "Recruitee",
                "bamboohr": "BambooHR", "breezy": "Breezy HR", "amazon": "Amazon Jobs", "microsoft": "Microsoft Careers",
-               "oracle": "Oracle Cloud"}
+               "oracle": "Oracle Cloud", "personio": "Personio", "teamtailor": "Teamtailor"}
 DETAIL_READERS = {"workday": _workday_jd, "breezy": _breezy_jd, "oracle": _oracle_jd, "reed": _reed_jd,
                   "arbeitsagentur": _arbeitsagentur_jd}
 
@@ -1390,6 +1527,9 @@ def _save_for_profiles(jobs, profiles, since, source, summary):
             if not exp_ok(job.get("jd"), p):                          # asks for more (or less) experience
                 _count(summary, source, "experience")
                 continue
+            if not visa_ok(job, p):                                    # the candidate needs a visa sponsor
+                _count(summary, source, "no visa sponsor")
+                continue
             if not skills_ok(job, p):                                  # title fits, but skills don't
                 summary["low_match"] = summary.get("low_match", 0) + 1
                 _count(summary, source, "low skills match")
@@ -1423,10 +1563,10 @@ def run(progress=None, auto=False):
         if not profiles:
             summary["errors"].append("No profile has target roles or a resume yet (Profiles page).")
             return summary
-        if not boards() or db.setting("suggested_version") != "3":   # add the well-known companies once
+        if not boards() or db.setting("suggested_version") != "4":   # add the well-known companies once
             for prov, tok, nm in SUGGESTED:
                 add_board(prov, tok, nm)
-            db.set_setting("suggested_version", "3")
+            db.set_setting("suggested_version", "4")
         active = [b for b in boards() if b["active"]]
         feeds = [f for f in FEEDS if feed_ready(f)]
         if auto and db.setting("last_collect_day") == db.today():
@@ -1463,8 +1603,8 @@ def run(progress=None, auto=False):
                 except Exception as e:  # one broken board never stops the others
                     _board_status(b["id"], f"Error: {str(e)[:80]}")
                     summary["errors"].append(f"{b['name']}: {str(e)[:80]}")
-        terms = sorted({r for p in profiles for r in db.roles_for_search(p)[:4]})   # main roles only (be polite)
-        big_terms = list(dict.fromkeys(r for p in profiles for r in db.roles_for_search(p)[:8]))  # top 8 roles, in order
+        terms = list(dict.fromkeys(t for p in profiles for t in core_terms(db.roles_for_search(p), 5)))     # be polite
+        big_terms = list(dict.fromkeys(t for p in profiles for t in core_terms(db.roles_for_search(p), 12)))  # free feeds
         countries = target_countries(profiles)
         _COUNTRIES_NOW[:] = countries
         feeds = [f for f in feeds if f not in COUNTRY_FEEDS or COUNTRY_FEEDS[f] in countries]
