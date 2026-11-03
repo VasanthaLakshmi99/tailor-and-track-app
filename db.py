@@ -59,6 +59,7 @@ class _Connection(sqlite3.Connection):
 def connect():
     con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False, factory=_Connection)
     con.row_factory = sqlite3.Row
+    con.execute("PRAGMA synchronous=NORMAL")       # with WAL (set once in init_db): safe and much faster writes
     return con
 
 
@@ -141,6 +142,9 @@ def init_db():
             id INTEGER PRIMARY KEY, provider TEXT, token TEXT, name TEXT,
             active INTEGER DEFAULT 1, last_checked TEXT, last_status TEXT,
             UNIQUE(provider, token))""")
+        con.execute("PRAGMA journal_mode=WAL")          # readers don't wait for writers (the J button during Collect)
+        if "empty_runs" not in _columns(con, "sources"):     # runs in a row with no matching job (sites skipped after 5)
+            con.execute("ALTER TABLE sources ADD COLUMN empty_runs INTEGER DEFAULT 0")
         con.execute("CREATE INDEX IF NOT EXISTS ix_jobs_company ON jobs(profile_id, company_norm)")
         if not con.execute("SELECT 1 FROM settings WHERE key='active_profile'").fetchone():
             con.execute("INSERT INTO settings VALUES('active_profile', ?)", (str(first),))
@@ -561,15 +565,24 @@ def move_resumes(new_folder):
     return moved
 
 
+_SETTINGS = {"at": 0.0, "values": {}}
+SETTINGS_TTL = 3.0      # seconds: settings are read thousands of times during one Collect
+
+
 def setting(key, default=""):
-    with connect() as con:
-        r = con.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        return r["value"] if r else default
+    import time
+    if time.time() - _SETTINGS["at"] > SETTINGS_TTL:
+        with connect() as con:
+            _SETTINGS["values"] = {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM settings")}
+        _SETTINGS["at"] = time.time()
+    v = _SETTINGS["values"].get(key)
+    return v if v is not None else default
 
 
 def set_setting(key, value):
     with connect() as con:
         con.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, value))
+    _SETTINGS["values"][key] = value
 
 
 def queue_tailoring(job_ids):

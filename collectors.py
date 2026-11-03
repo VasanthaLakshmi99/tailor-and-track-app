@@ -17,6 +17,7 @@ import html
 import json
 import re
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -27,7 +28,8 @@ import matching
 
 UA = {"User-Agent": "TailorTrack/1.0 (personal job tracker)"}
 PAUSE = 0.7            # seconds between requests to the same site, to be polite
-BOARD_THREADS = 6      # companies checked at the same time (each one is a different site)
+BOARD_THREADS = 8      # companies checked at the same time (each one is a different site)
+FEED_THREADS = 6       # job feeds checked at the same time
 WINDOW_HOURS = 24          # default; changed with the "Date posted" filter on Find jobs
 WINDOWS = {"Past 30 minutes": 0.5, "Past 1 hour": 1, "Past 3 hours": 3, "Past 6 hours": 6, "Past 10 hours": 10,
            "Past 24 hours": 24, "Past 3 days": 72, "Past week": 168, "Past month": 720}
@@ -304,6 +306,16 @@ def init():
 def boards():
     with db.connect() as con:
         return [dict(r) for r in con.execute("SELECT * FROM sources ORDER BY name COLLATE NOCASE")]
+
+
+SKIP_AFTER = 5       # a company site with no matching job in 5 collects in a row is checked once a week only
+RECHECK_DAYS = 7
+
+
+def reset_skips():
+    """Check every company site again (after the roles or a profile change)."""
+    with db.connect() as con:
+        con.execute("UPDATE sources SET empty_runs=0")
 
 
 def add_board(provider, token, name=""):
@@ -1602,6 +1614,14 @@ def _save_for_profiles(jobs, profiles, since, source, summary, strict_since=None
                               posted_at=job["posted"].astimezone(timezone.utc).isoformat() if job.get("posted") else None,
                               origin="collect")
             key = "new" if res["level"] in ("new", "warning") else "duplicates"
+            if key == "new":
+                if job.get("_board"):
+                    hits = summary.setdefault("board_new", {})
+                    hits[str(job["_board"])] = hits.get(str(job["_board"]), 0) + 1
+                try:
+                    add_board_from_job(job)                        # learn sponsors' own careers sites
+                except Exception:
+                    pass
             summary[key] += 1
             _count(summary, source, "saved" if key == "new" else "duplicate blocked")
             summary["by_profile"][p["name"]] = summary["by_profile"].get(p["name"], 0) + (key == "new")
@@ -1638,6 +1658,11 @@ def run(progress=None, auto=False):
                 add_board(prov, tok, nm)
             db.set_setting("suggested_version", "4")
         active = [b for b in boards() if b["active"]]
+        week_ago = (datetime.now() - timedelta(days=RECHECK_DAYS)).strftime("%Y-%m-%d %H:%M:%S")
+        skipped = [b for b in active if (b.get("empty_runs") or 0) >= SKIP_AFTER and (b.get("last_checked") or "") > week_ago]
+        active = [b for b in active if b not in skipped]          # sites that never have a matching job: weekly only
+        summary["skipped_boards"] = len(skipped)
+        fetched_ok = []
         feeds = [f for f in FEEDS if feed_ready(f)]
         if auto and db.setting("last_collect_day") == db.today():
             feeds = [f for f in feeds if f != "jsearch"]      # keep the free monthly quota
@@ -1649,7 +1674,6 @@ def run(progress=None, auto=False):
                 return b, FETCHERS[b["provider"]](b["token"], b["name"]), None
             except Exception as e:
                 return b, None, e
-        from concurrent.futures import ThreadPoolExecutor, as_completed
         with ThreadPoolExecutor(max_workers=BOARD_THREADS) as pool:
             for fut in as_completed([pool.submit(fetch_board, b) for b in active]):
                 b, jobs, err = fut.result()
@@ -1662,7 +1686,10 @@ def run(progress=None, auto=False):
                     recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
                     fresh = len([j for j in recent if j["posted"] >= strict])
                     summary["found"] += fresh
+                    for j in recent:
+                        j["_board"] = b["id"]
                     pending += [(j, SOURCE_NAME[b["provider"]]) for j in recent]
+                    fetched_ok.append(b["id"])
                     _board_status(b["id"], f"OK · {len(jobs)} open · {fresh} new")
                 except LookupError:
                     _board_status(b["id"], "Not found: switched off (check the link or remove it)")
@@ -1693,21 +1720,43 @@ def run(progress=None, auto=False):
                       "wwr": fetch_wwr,
                       "remotive": lambda: fetch_remotive(terms), "themuse": fetch_themuse,
                       "arbeitnow": fetch_arbeitnow, "remoteok": fetch_remoteok, "jobicy": fetch_jobicy}
-        for f in feeds:
-            step += 1
-            if progress:
-                progress(step / max(total, 1), FEEDS[f])
+        def fetch_feed(f):                       # job feeds are different sites too: several at once
             try:
-                jobs = feed_fetch[f]()
+                return f, feed_fetch[f](), None
+            except Exception as e:
+                return f, None, e
+        with ThreadPoolExecutor(max_workers=FEED_THREADS) as pool:
+            for fut in as_completed([pool.submit(fetch_feed, f) for f in feeds]):
+                f, jobs, err = fut.result()
+                step += 1
+                if progress:
+                    progress(step / max(total, 1), FEEDS[f])
+                if isinstance(err, requests.ConnectionError):
+                    summary["errors"].append(f"{FEEDS[f]}: no internet connection")
+                    continue
+                if err:
+                    summary["errors"].append(f"{FEEDS[f]}: {str(err)[:80]}")
+                    continue
                 recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
                 _count(summary, FEEDS[f], "jobs received")
                 summary["by_source"][FEEDS[f]]["jobs received"] = len(jobs)
                 summary["found"] += len([j for j in recent if j["posted"] >= strict])
                 pending += [(j, FEEDS[f]) for j in recent]
-            except requests.ConnectionError:
-                summary["errors"].append(f"{FEEDS[f]}: no internet connection")
-            except Exception as e:
-                summary["errors"].append(f"{FEEDS[f]}: {str(e)[:80]}")
+        # job descriptions that come separately (Workday, SmartRecruiters, Oracle, Reed): fetch them all at once,
+        # only for jobs that may fit a profile and are not saved yet
+        need = [j for j, _ in pending if j.get("jd") is None and j.get("_detail")
+                and any(wrong_fit(j, p) is None and not db.has_job(p["id"], j["company"], j["url"]) for p in profiles)]
+        if need:
+            if progress:
+                progress(1.0, f"Reading {len(need)} job descriptions…")
+
+            def read_jd(j):
+                try:
+                    j["jd"] = DETAIL_READERS.get(j.get("_kind"), _smartrecruiters_jd)(j["_detail"]) or j.get("_snippet") or ""
+                except Exception:
+                    j["jd"] = j.get("_snippet") or ""
+            with ThreadPoolExecutor(max_workers=BOARD_THREADS) as pool:
+                list(pool.map(read_jd, need))
         # newest jobs first; jobs older than 'Date posted' only until each profile has its target number
         if progress:
             progress(1.0, f"Checking {len(pending)} jobs against the resume…")
@@ -1715,6 +1764,13 @@ def run(progress=None, auto=False):
         for job, src in pending:
             _save_for_profiles([job], profiles, since, src, summary, strict_since=strict, target=target)
         _FETCH["hours"] = None
+        hits = summary.get("board_new", {})
+        with db.connect() as con:                                   # sites with no match this run count one more
+            for bid in fetched_ok:
+                if hits.get(str(bid)):
+                    con.execute("UPDATE sources SET empty_runs=0 WHERE id=?", (bid,))
+                else:
+                    con.execute("UPDATE sources SET empty_runs=COALESCE(empty_runs, 0)+1 WHERE id=?", (bid,))
         summary["target"] = target
         summary["finished"] = db.now()
         db.set_setting("last_collect", json.dumps(summary))
@@ -1771,3 +1827,162 @@ def start_daily():
     """While the app is open, collects every few hours (Collection settings, default every 3 hours)."""
     init()
     threading.Thread(target=_daily_loop, daemon=True, name="jobpilot-daily").start()
+
+
+# ---------------------------------------------------------------- careers sites of big UK visa-sponsor employers
+# uk_employers.py lists ~600 big and medium UK employers with a sponsor licence. Their careers sites are found once,
+# on your laptop: each job system's public address is tried with the company's name. Found sites become company
+# boards ("... (UK sponsor)"), checked on every Collect. Companies on systems that can't be read for free
+# (SuccessFactors, Taleo, iCIMS, Eightfold, own sites) are still reached through Reed, Jooble and JSearch.
+FINDER_THREADS = 8
+_finder_lock = threading.Lock()
+_FINDER = {"running": False, "done": 0, "total": 0, "found": 0}
+_SLUG_SKIP = {"university", "royal", "british", "global", "united", "national", "the", "group", "international", "first",
+              "general", "capital", "american", "london", "oxford", "cambridge", "virgin", "three", "next", "global"}
+_SLUG_DROP = {"plc", "ltd", "limited", "group", "uk", "the", "holdings", "company", "co", "inc", "llp", "of"}
+
+
+def _slugs(name):
+    """'Lloyds Banking Group' -> ['lloydsbanking', 'lloydsbankinggroup', 'lloyds-banking']; at most 3 tries."""
+    low = re.sub(r"\(.*?\)", " ", name.lower()).replace("&", " and ").replace("+", " ").replace("'", "")
+    words = re.findall(r"[a-z0-9]+", low)
+    core = [w for w in words if w not in _SLUG_DROP and w != "and"] or words
+    out = ["".join(core), "".join(w for w in words if w != "and"), "-".join(core)]
+    if len(core) > 1 and len(core[0]) >= 5 and core[0] not in _SLUG_SKIP:
+        out.append(core[0])
+    return [s for s in dict.fromkeys(out) if len(s) >= 3][:3]
+
+
+def _same_company(board_name, name):
+    a = set(re.findall(r"[a-z0-9]+", (board_name or "").lower())) - _SLUG_DROP
+    b = set(re.findall(r"[a-z0-9]+", name.lower())) - _SLUG_DROP
+    return bool(a & b) or not board_name
+
+
+def _probe(provider, slug, name):
+    """The board token if this job system has a careers site for the company, else None."""
+    g = lambda url, **kw: requests.get(url, headers=UA, timeout=10, **kw)
+    try:
+        if provider == "greenhouse":
+            r = g(f"https://boards-api.greenhouse.io/v1/boards/{slug}")
+            return slug if r.ok and _same_company(r.json().get("name"), name) else None
+        if provider == "lever":
+            r = g(f"https://api.lever.co/v0/postings/{slug}", params={"mode": "json", "limit": 1})
+            return slug if r.ok and isinstance(r.json(), list) and r.json() else None
+        if provider == "ashby":
+            r = g(f"https://api.ashbyhq.com/posting-api/job-board/{slug}")
+            return slug if r.ok and (r.json().get("jobs") or []) else None
+        if provider == "smartrecruiters":
+            camel = "".join(w.capitalize() for w in slug.split("-"))
+            for ident in dict.fromkeys([camel, slug]):
+                r = g(f"https://api.smartrecruiters.com/v1/companies/{ident}/postings", params={"limit": 1})
+                if r.ok and (r.json().get("totalFound") or 0) > 0:
+                    first = (r.json().get("content") or [{}])[0]
+                    if _same_company(((first.get("company") or {}).get("name")), name):
+                        return ident
+            return None
+        if provider == "workable":
+            r = g(f"https://apply.workable.com/api/v1/widget/accounts/{slug}")
+            return slug if r.ok and (r.json().get("jobs") or []) and _same_company(r.json().get("name"), name) else None
+        if provider == "recruitee":
+            r = g(f"https://{slug}.recruitee.com/api/offers/")
+            return slug if r.ok and (r.json().get("offers") or []) else None
+        if provider == "personio":
+            r = g(f"https://{slug}.jobs.personio.de/xml")
+            return slug if r.ok and "<position" in (r.text or "") else None
+        if provider == "teamtailor":
+            r = g(f"https://{slug}.teamtailor.com/jobs.rss")
+            return slug if r.ok and "<item" in (r.text or "") else None
+        if provider == "workday":
+            for wd in ("wd3", "wd1", "wd5"):
+                r = g(f"https://{slug}.{wd}.myworkdayjobs.com/", allow_redirects=True)
+                hit = parse_board(r.url) if r.ok else None
+                if hit and hit[0] == "workday" and not hit[1].endswith("/wday"):
+                    base, tenant, site = _workday_parts(hit[1])
+                    t = requests.post(f"{base}/wday/cxs/{tenant}/{site}/jobs", headers={**UA, "Content-Type": "application/json"},
+                                      json={"appliedFacets": {}, "limit": 1, "offset": 0, "searchText": ""}, timeout=10)
+                    if t.ok:
+                        return hit[1]
+            return None
+    except (requests.RequestException, ValueError):
+        return None
+    return None
+
+
+NAME_CHECKED = {"greenhouse", "smartrecruiters", "workable"}   # these answer with the company's name, so it is checked
+FINDER_ORDER = ["greenhouse", "lever", "ashby", "smartrecruiters", "workable", "workday", "teamtailor", "personio", "recruitee"]
+
+
+def find_board(name):
+    """(provider, token) of a company's careers site on a job system Tailor&Track can read, or None."""
+    slugs = _slugs(name)
+    words = re.findall(r"[a-z0-9]+", re.sub(r"\(.*?\)", " ", name.lower()).replace("'", ""))
+    full = {"".join(words), "-".join(words), "".join(w for w in words if w not in _SLUG_DROP and w != "and"),
+            "-".join(w for w in words if w not in _SLUG_DROP and w != "and")}
+    for provider in FINDER_ORDER:
+        for slug in (slugs[:1] if provider == "workday" else slugs):
+            if provider not in NAME_CHECKED and (len(slug.replace("-", "")) < 5 or slug not in full):
+                continue                                      # 'next', 'marks': too likely to be another company
+            token = _probe(provider, slug, name)
+            if token:
+                return provider, token
+    return None
+
+
+def finder_results():
+    try:
+        return json.loads(db.setting("uk_finder") or "{}")
+    except ValueError:
+        return {}
+
+
+def find_uk_sponsor_boards(force=False, limit=None):
+    """Find the careers sites of the UK sponsor employers (uk_employers.py) once, and add them as company boards."""
+    import uk_employers
+    if not _finder_lock.acquire(blocking=False):
+        return _FINDER
+    try:
+        init()
+        results = {} if force else finder_results()
+        todo = [n for _, n in uk_employers.employers() if n not in results][:limit]
+        _FINDER.update(running=True, done=0, total=len(todo), found=0)
+        known = {(b["provider"], b["token"].lower()) for b in boards()}
+
+        def one(name):
+            return name, find_board(name)
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=FINDER_THREADS) as pool:
+            for fut in as_completed([pool.submit(one, n) for n in todo]):
+                name, hit = fut.result()
+                _FINDER["done"] += 1
+                if hit:
+                    _FINDER["found"] += 1
+                    results[name] = f"{hit[0]}:{hit[1]}"
+                    if (hit[0], hit[1].lower()) not in known:
+                        add_board(hit[0], hit[1], f"{name} (UK sponsor)")
+                        known.add((hit[0], hit[1].lower()))
+                else:
+                    results[name] = "none"
+                if _FINDER["done"] % 20 == 0:                  # save progress as it goes
+                    db.set_setting("uk_finder", json.dumps(results))
+        db.set_setting("uk_finder", json.dumps(results))
+        db.set_setting("uk_finder_at", db.now())
+        return dict(_FINDER)
+    finally:
+        _FINDER["running"] = False
+        _finder_lock.release()
+
+
+def start_uk_finder(force=False):
+    threading.Thread(target=find_uk_sponsor_boards, kwargs={"force": force}, daemon=True, name="tt-uk-finder").start()
+
+
+def add_board_from_job(job):
+    """A saved job from a UK sponsor whose link is the company's own careers site: check that site on every Collect."""
+    import sponsors
+    hit = parse_board(job.get("url") or "")
+    if not hit or not sponsors.uk_sponsor(job.get("company") or ""):
+        return
+    if (hit[0], hit[1].lower()) not in {(b["provider"], b["token"].lower()) for b in boards()}:
+        add_board(hit[0], hit[1], f"{job.get('company')} (UK sponsor)")

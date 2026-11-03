@@ -12,6 +12,7 @@ Different spellings count as the same skill: "k8s" = "Kubernetes",
 This is an estimate to sort jobs - not an employer's ATS score.
 """
 VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
+import functools
 import re
 
 # canonical name: other spellings
@@ -155,8 +156,14 @@ def _pattern(term):
     return re.compile(r"(?<![a-z0-9+#])" + t + r"(?![a-z0-9+#])")
 
 
-_PATTERNS = {name: [_pattern(a) for a in [name] + alts] for name, alts in SKILLS.items()}
-_STRICT = {name: [_pattern(a) for a in [name] + alts if a.lower() not in AMBIGUOUS] for name, alts in SKILLS.items()}
+def _needle(term):
+    """The longest plain piece of a skill name: if it isn't in the text, the skill can't be either (fast check)."""
+    parts = re.split(r"[\s-]+", term.lower())
+    return max(parts, key=len) if parts else term.lower()
+
+
+_PATTERNS = {name: [(_needle(a), _pattern(a)) for a in [name] + alts] for name, alts in SKILLS.items()}
+_STRICT = {name: [(_needle(a), _pattern(a)) for a in [name] + alts if a.lower() not in AMBIGUOUS] for name, alts in SKILLS.items()}
 
 
 _KNOWN = {a.lower() for name, alts in SKILLS.items() for a in [name] + alts}
@@ -178,6 +185,11 @@ _SKIP_SKILL_LINES = re.compile(r"^(languages?|awards?|honou?rs|interests|hobbies
 
 
 def learn_skills(resume_text):
+    return list(_learn_skills(resume_text or ""))
+
+
+@functools.lru_cache(maxsize=64)
+def _learn_skills(resume_text):
     """Skills written in the resume's own Skills section, e.g. 'Tools: Jira, Zephyr, qTest'.
     Lets every profile be scored on its own skills, whatever the role."""
     out, inside = [], False
@@ -203,7 +215,7 @@ def learn_skills(resume_text):
                     and not (" " not in item and item.islower() and (len(item) < 9 or low in _ADJ)) \
                     and re.search(r"[a-z]", low):
                 out.append(item)
-    return sorted(set(out), key=str.lower)
+    return tuple(sorted(set(out), key=str.lower))
 
 
 def find_skills(text, strict=False, extra=()):
@@ -211,7 +223,7 @@ def find_skills(text, strict=False, extra=()):
     low = (text or "").lower()
     found = {}
     for name, pats in (_STRICT if strict else _PATTERNS).items():
-        n = sum(len(p.findall(low)) for p in pats)
+        n = sum(len(p.findall(low)) for needle, p in pats if needle in low)
         if n:
             found[name] = n
     for name in extra:                     # the profile's own skills
@@ -243,6 +255,11 @@ def score(jd, resume_text, title="", roles=()):
 
 
 def title_score(title, resume_text, roles=()):
+    return _title_score(title or "", resume_text or "", tuple(roles or ()))
+
+
+@functools.lru_cache(maxsize=20000)
+def _title_score(title, resume_text, roles=()):
     """0-100: how close the job title is to the candidate's roles (target roles, resume headline, past job titles)."""
     if title_fit(title, roles):
         return 100
@@ -283,6 +300,7 @@ LEVEL_WORDS = {"senior", "sr", "junior", "jr", "lead", "principal", "staff", "as
                "the", "of", "and", "for", "a", "an", "to", "-", "/", "&"}
 
 
+@functools.lru_cache(maxsize=20000)
 def _title_words(text):
     """Job title -> list of plain words, in order, without level words. 'Sr. Dev Ops Engineers' -> ['devops','engineer']"""
     t = (text or "").lower()
@@ -294,7 +312,7 @@ def _title_words(text):
     swaps = {"engineers": "engineer", "engineering": "engineer", "engg": "engineer", "eng": "engineer",
              "developers": "developer", "dev": "developer", "administrators": "administrator", "admin": "administrator",
              "analysts": "analyst", "sr.": "senior", "devsecops": "devsecops"}
-    return [swaps.get(w, w) for w in words if w not in LEVEL_WORDS and swaps.get(w, w) not in LEVEL_WORDS]
+    return tuple(swaps.get(w, w) for w in words if w not in LEVEL_WORDS and swaps.get(w, w) not in LEVEL_WORDS)
 
 
 def _contains(seq, sub):
@@ -306,6 +324,11 @@ CORE_WORDS = {"devops": "DevOps Engineer", "devsecops": "DevSecOps Engineer", "k
 
 
 def title_fit(title, roles):
+    return _title_fit(title or "", tuple(roles or ()))
+
+
+@functools.lru_cache(maxsize=20000)
+def _title_fit(title, roles):
     """Which of the target roles this job title fits, or None.
     The role words must appear together in the title: 'Senior Cloud / DevOps Engineer' fits 'DevOps Engineer',
     but 'Senior Data Engineer - Data Platform' does NOT fit 'Platform Engineer'."""
@@ -399,7 +422,8 @@ GENERIC_TITLES = {"Software Engineer", "Software Developer"}
 
 def years_of_experience(resume_text):
     """'DevOps Engineer with 4+ years of experience' -> 4 (None if not written)."""
-    m = re.findall(r"(\d{1,2})\s*\+?\s*(?:years|yrs)", (resume_text or "")[:1500], re.I)
+    head = _WORD_NUM.sub(lambda w: str(_NUMS[w.group(1).lower()]), (resume_text or "")[:1500])   # "Four years" -> 4
+    m = re.findall(r"(\d{1,2})\s*\+?\s*(?:years|yrs)", head, re.I)
     return max(int(x) for x in m) if m else None
 
 
@@ -495,7 +519,7 @@ _NOISE = {"services", "service", "management", "support", "systems", "system", "
 def is_tech(text):
     """True if the text is about technology work (a few real tech tools, not just 'networking')."""
     low = (text or "").lower()
-    hits = {n for n in TECH_NAMES - TECH_WORDY for p in _STRICT.get(n, []) if p.search(low)}
+    hits = {n for n in TECH_NAMES - TECH_WORDY for needle, p in _STRICT.get(n, []) if needle in low and p.search(low)}
     return len(hits) >= 3
 
 
@@ -504,6 +528,12 @@ BUSINESS_EXTRA = {"capacity planning", "change management", "compliance", "docum
 
 
 def jd_keywords(jd, resume_text="", company=""):
+    """ATS keywords of a JD (cached: the same JD is scored several times during one Collect)."""
+    return list(_jd_keywords(jd or "", resume_text or "", company or ""))
+
+
+@functools.lru_cache(maxsize=4000)
+def _jd_keywords(jd, resume_text="", company=""):
     """ATS keywords of a JD, most important first: [(display, key, weight, kind)] with kind 'hard' or 'soft'.
     Uses the skills dictionary, the resume's own Skills list, common ATS phrases and tool names in the requirements."""
     jd = jd or ""
@@ -562,7 +592,7 @@ def jd_keywords(jd, resume_text="", company=""):
             continue                     # "automation" when "automation testing" is there too
         seen.add(key)
         out.append((disp.strip(), key, w, kind))
-    return out
+    return tuple(out)
 
 
 def has_keyword(text, display, key):

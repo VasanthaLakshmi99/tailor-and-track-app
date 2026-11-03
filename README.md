@@ -63,6 +63,13 @@ The app must be running for the J button to work.
 6. **Apply & track:** open each job, apply, and tick **Applied ✓**. Download the Excel report at the bottom (pick **Custom dates…** for any period).
    **🧹 Duplicate jobs** at the bottom removes jobs saved twice.
 
+### Big UK visa-sponsor employers
+**Find jobs → ⚙️ Collection settings → 🇬🇧 Big UK visa-sponsor employers → 🔎 Find careers sites** (once, 10–20 minutes,
+in the background): the app looks up the careers sites of about 600 large UK employers that hold a sponsor licence
+(`uk_employers.py`, edit freely) and checks the ones it can read on every Collect. It also adds a sponsor's careers site
+automatically when a saved job links to it. Company sites with no matching job in 5 collects in a row are checked
+once a week only, so Collect stays fast.
+
 ### Visa sponsorship
 In **Profiles**, fill **Needs visa sponsorship for** (e.g. `United Kingdom`). Then:
 - every job shows ✅ licensed sponsor / JD offers sponsorship, ❌ JD says no, ⚠️ not on the UK register, ❔ not mentioned

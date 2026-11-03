@@ -13,6 +13,7 @@ import matching
 import collectors
 import report
 import sponsors
+import uk_employers
 import tailor
 import autotailor
 
@@ -20,7 +21,7 @@ st.set_page_config(page_title="Tailor&Track", page_icon="🧵", layout="wide")
 
 # ---------------------------------------------------------------- are all files from the same update?
 VERSION = "2026-11-03a"
-_old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor, sponsors)
+_old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor, sponsors, uk_employers)
         if getattr(m, "VERSION", None) != VERSION]
 if _old:
     st.error("Some Tailor&Track files are from an older update: **" + ", ".join(_old) + "**.  \n"
@@ -39,6 +40,9 @@ def start_receiver():
         collectors.start_daily()
         if any(sponsors.needs_visa(p) for p in db.profiles()):
             sponsors.refresh_in_background()      # UK register of licensed sponsors, once a week
+        if any("united kingdom" in ",".join(sponsors.needs_visa(p) + collectors.locations_for(p)).lower()
+               for p in db.profiles()) and not db.setting("uk_finder_at"):
+            collectors.start_uk_finder()          # careers sites of the big UK sponsor employers, once
     return status
 
 
@@ -313,6 +317,38 @@ def collect_now():
             box.update(label=f"Done: {summary['new']} new jobs saved", state="complete")
 
 
+def uk_sponsor_finder_box():
+    """Careers sites of ~600 big UK visa-sponsor employers, found once and checked on every Collect."""
+    import uk_employers
+    total = len(uk_employers.employers())
+    res = collectors.finder_results()
+    found = {n: v for n, v in res.items() if v != "none"}
+    st.markdown(f"**🇬🇧 Big UK visa-sponsor employers ({total})**  \n"
+                f"Banks, consultancies, tech, pharma, retail, energy, universities, law firms and recruitment agencies "
+                f"that hold a UK sponsor licence. Tailor&Track finds each one's careers site once and checks it on every "
+                f"Collect. Checked **{len(res)}/{total}**, careers sites found **{len(found)}**.")
+    if collectors._FINDER["running"]:
+        st.info(f"⏳ Finding careers sites… {collectors._FINDER['done']}/{collectors._FINDER['total']} checked, "
+                f"{collectors._FINDER['found']} found. You can keep using the app; click 🔄 Refresh list to update.")
+    c1, c2 = st.columns(2)
+    if c1.button("🔎 Find careers sites" if len(res) < total else "✓ Done · check for new ones",
+                 disabled=collectors._FINDER["running"], width="stretch",
+                 help="One time, runs in the background (about 10–20 minutes). Needs the internet."):
+        collectors.start_uk_finder()
+        st.rerun()
+    if res and c2.button("↻ Check all again", disabled=collectors._FINDER["running"], width="stretch",
+                         help="Companies sometimes move to a new careers site. Once every few months is enough."):
+        collectors.start_uk_finder(force=True)
+        st.rerun()
+    if res:
+        with st.expander(f"Which employers were found ({len(found)}) and which were not ({len(res) - len(found)})"):
+            st.caption("Not found = the company uses a careers system that can't be read for free (SuccessFactors, Taleo, "
+                       "iCIMS, its own website …). Its jobs still come through Reed, Jooble and JSearch, and the app adds "
+                       "its careers site automatically when a saved job links to one it can read.")
+            st.dataframe(pd.DataFrame([{"Company": n, "Careers site": v.split(":", 1)[0].title() if v != "none" else "—"}
+                                       for n, v in sorted(res.items())]), hide_index=True, width="stretch", height=300)
+
+
 def collection_settings():
     c1, c2 = st.columns(2)
     auto = c1.toggle("Collect new jobs automatically", value=db.setting("collect_auto", "1") == "1",
@@ -371,6 +407,8 @@ def collection_settings():
             if not missing and on != (db.setting(f"feed_{key}", "1") == "1"):
                 db.set_setting(f"feed_{key}", "1" if on else "0")
 
+    uk_sponsor_finder_box()
+
     all_boards = collectors.boards()
     st.markdown(f"**Company career boards ({len(all_boards)})**  \nPaste a company's careers page link. "
                 "Works with Greenhouse, Lever, Ashby, SmartRecruiters, Workable, Workday, Oracle Cloud, Personio, Teamtailor, Recruitee, BambooHR, Breezy HR "
@@ -397,7 +435,18 @@ def collection_settings():
         for prov, tok, nm2 in collectors.SUGGESTED:
             collectors.add_board(prov, tok, nm2)
         st.rerun()
+    sk = [b for b in all_boards if b["active"] and (b.get("empty_runs") or 0) >= collectors.SKIP_AFTER]
+    if sk:
+        s1, s2 = st.columns([3, 1], vertical_alignment="center")
+        s1.caption(f"⏩ **{len(sk)}** company sites had no matching job in {collectors.SKIP_AFTER}+ collects in a row, so "
+                   f"they're checked once a week only (makes Collect faster). Changing a profile's roles checks them again.")
+        if s2.button("Check them all again", width="stretch"):
+            collectors.reset_skips()
+            st.rerun()
     if all_boards:
+        for b in all_boards:
+            if b["active"] and (b.get("empty_runs") or 0) >= collectors.SKIP_AFTER:
+                b["last_status"] = f"⏩ weekly only (no match in {b['empty_runs']} runs) · " + (b["last_status"] or "")
         df = pd.DataFrame(all_boards)[["id", "active", "name", "provider", "last_status"]]
         df["provider"] = df["provider"].map(collectors.SOURCE_NAME).fillna(df["provider"])
         df["active"] = df["active"].astype(bool)
@@ -575,7 +624,8 @@ def find_jobs_page():
             mine = last.get("by_profile", {}).get(P["name"], 0)
             st.caption(f"Last run {last.get('finished', '')[:16]} · **{mine} new for {P['name']}**"
                        + (f" ({last['topped_up']} slightly older, to reach {last.get('target')})" if last.get("topped_up") else "")
-                       + f" · {last['found']} new jobs checked · {len(last.get('errors') or [])} problem(s)")
+                       + f" · {last['found']} new jobs checked · {len(last.get('errors') or [])} problem(s)"
+                       + (f" · {last['skipped_boards']} quiet sites skipped" if last.get("skipped_boards") else ""))
         else:
             st.caption("Not run yet. Click Collect now: Tailor&Track reads the resume and searches for you.")
         h = time_filter("Date posted", "date_posted_collect", collectors.window_hours(),
@@ -958,6 +1008,8 @@ def profile_box(p, active):
                                  p.get("confirmed_skills") or "", height=70,
                                  help="Filled when you tick skills on the Tailor page. Used for match % and every tailored resume.")
         if st.form_submit_button("Save"):
+            if roles.strip() != (p["roles"] or "").strip():
+                collectors.reset_skips()            # new roles: every company site may match again
             db.update_profile(pid, name or p["name"], roles, locs)
             db.set_setting(f"visa_need_{pid}", visa.strip())
             db.set_setting(f"visa_only_{pid}", "1" if only_sp else "0")
