@@ -51,11 +51,12 @@ def fetch_hours():
 
 
 def target_jobs():
-    """New jobs wanted per profile per Collect (topped up with slightly older jobs). 0 = off."""
+    """Top-up: when fewer jobs were posted in the Date posted time, add the newest older ones (up to 7 days)
+    until each profile has this many new jobs. 0 = off (default): only jobs from the Date posted time."""
     try:
-        return int(float(db.setting("target_jobs", "30") or 30))
+        return int(float(db.setting("topup_jobs", "0") or 0))
     except ValueError:
-        return 30
+        return 0
 
 
 def window_label(h=None):
@@ -1555,7 +1556,7 @@ def prune_waiting():
                 continue
             if wrong_fit(dict(j), p):
                 gone.append(j["id"])
-    db.delete_jobs(gone)
+    db.delete_jobs(gone, remember=False)   # they may fit again if the profile changes
     return len(gone)
 
 

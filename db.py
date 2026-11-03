@@ -46,8 +46,18 @@ JOB_COLUMNS = """
 
 # ---------------------------------------------------------------- setup
 
+class _Connection(sqlite3.Connection):
+    """'with connect() as con:' commits (or rolls back) AND closes the connection.
+    (Plain sqlite3 only commits, leaving the file open: after a few hundred, macOS refuses to open more.)"""
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self.close()
+
+
 def connect():
-    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False, factory=_Connection)
     con.row_factory = sqlite3.Row
     return con
 
@@ -66,6 +76,10 @@ def init_db():
             filename TEXT, data BLOB, text TEXT, uploaded_at TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS dismissed (
+            profile_id INTEGER, job_key TEXT, at TEXT,
+            PRIMARY KEY (profile_id, job_key)
+        );
         CREATE TABLE IF NOT EXISTS removed (
             id INTEGER PRIMARY KEY,
             company TEXT, title TEXT, source TEXT, apply_url TEXT,
@@ -433,9 +447,11 @@ def check_duplicate(pid, company, title, url):
 
 
 def has_job(pid, company, url):
-    """True if this exact posting is already saved for the profile."""
+    """True if this exact posting is already saved for the profile, or was deleted by you (so Collect skips it)."""
+    key = job_key(url, company)
     with connect() as con:
-        return con.execute("SELECT 1 FROM jobs WHERE profile_id=? AND job_key=?", (pid, job_key(url, company))).fetchone() is not None
+        return con.execute("SELECT 1 FROM jobs WHERE profile_id=? AND job_key=? UNION ALL "
+                           "SELECT 1 FROM dismissed WHERE profile_id=? AND job_key=?", (pid, key, pid, key)).fetchone() is not None
 
 
 # ---------------------------------------------------------------- badges on search results
@@ -608,9 +624,13 @@ def hide_job(job_id):
         con.execute("UPDATE jobs SET status='hidden' WHERE id=?", (job_id,))
 
 
-def delete_jobs(job_ids):
-    """Delete saved jobs that were NOT applied (applied jobs are kept for reports)."""
+def delete_jobs(job_ids, remember=True):
+    """Delete saved jobs that were NOT applied (applied jobs are kept for reports).
+    remember=True: Collect never brings these postings back (you can still save one with the J button)."""
     with connect() as con:
+        if remember:
+            con.executemany("INSERT OR IGNORE INTO dismissed SELECT profile_id, job_key, ? FROM jobs "
+                            "WHERE id=? AND status!='applied'", [(now(), i) for i in job_ids])
         con.executemany("DELETE FROM jobs WHERE id=? AND status!='applied'", [(i,) for i in job_ids])
 
 

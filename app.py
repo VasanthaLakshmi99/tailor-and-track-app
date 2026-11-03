@@ -111,11 +111,11 @@ def collect_filters():
                                  "Any job my skills match: any title with 60%+ skills match (most jobs).")
         if mode != collectors.match_mode(P):
             db.set_setting(f"match_mode_{PID}", mode)
-        tgt = f3.number_input("🔢 Jobs wanted", 0, 200, collectors.target_jobs(), 5, key="target_jobs_in",
-                              help="If fewer new jobs were posted in the Date posted time, Collect now adds the newest "
-                                   "slightly older ones (up to 7 days) until it has this many. 0 = off.")
+        tgt = f3.number_input("➕ Top up with older jobs to", 0, 200, collectors.target_jobs(), 5, key="topup_jobs_in",
+                              help="0 = off (only jobs posted in the Date posted time). E.g. 30: if fewer than 30 "
+                                   "matching jobs were posted in that time, the newest older ones (up to 7 days) are added.")
         if tgt != collectors.target_jobs():
-            db.set_setting("target_jobs", str(tgt))
+            db.set_setting("topup_jobs", str(tgt))
 
 
 def roles_text(roles):
@@ -693,7 +693,7 @@ def linkedin_filters(saved):
                           label_visibility="collapsed")
     st.session_state.setdefault(k + "date", "Any time")
     row1 = st.columns(6, gap="small")
-    row2 = st.columns(6, gap="small")
+    row2 = st.columns([1, 1, 1, 1, 1.15, 1.1, 0.9], gap="small")
 
     def multi(col, name, field, key, order=None, help=None):
         counts = opts(field)
@@ -730,7 +730,7 @@ def linkedin_filters(saved):
     with row2[3].popover(label("Sort", None if st.session_state.get(k + "sort", SORTS[0]) == SORTS[0]
                                else st.session_state[k + "sort"]), width="stretch"):
         st.radio("Sort by", SORTS, key=k + "sort")
-    if row2[5].button("↺ Reset", width="stretch", help="Clear every filter"):
+    if row2[6].button("↺ Reset", width="stretch", help="Clear every filter"):
         for key in [x for x in st.session_state if str(x).startswith(k)]:
             del st.session_state[key]
         st.rerun()
@@ -759,6 +759,19 @@ def linkedin_filters(saved):
     active = sum(bool(x) for x in (query.strip(), hours, levels, countries, places, types, companies, visa, sources,
                                    st.session_state.get(k + "match")))
     row2[4].markdown(f"**{len(out)}** of {len(saved)} jobs" + (f"  \n{active} filter(s) on" if active else ""))
+    keep_ids = {j["id"] for j in out}
+    drop = [j["id"] for j in saved if j["id"] not in keep_ids]
+    with row2[5].popover("✅ Keep only these", width="stretch", disabled=not (active and drop)):
+        st.markdown(f"Keep the **{len(out)}** job(s) shown and **delete the other {len(drop)}** waiting job(s) of "
+                    f"{P['name']}. Tailor resumes and Apply & track then show only these.")
+        st.caption("Applied jobs are never deleted. Deleted jobs are not collected again "
+                   "(you can still save one with the J button).")
+        if st.button(f"Delete {len(drop)} and keep {len(out)}", type="primary", key=k + "keep_go"):
+            db.delete_jobs(drop)
+            for key in [x for x in st.session_state if str(x).startswith(k)]:
+                del st.session_state[key]
+            st.session_state["deleted_msg"] = f"Kept {len(out)} job(s), deleted {len(drop)}."
+            st.rerun()
     return out
 
 
