@@ -46,8 +46,18 @@ JOB_COLUMNS = """
 
 # ---------------------------------------------------------------- setup
 
+class _Connection(sqlite3.Connection):
+    """'with connect() as con:' commits (or rolls back) AND closes the connection.
+    (Plain sqlite3 only commits, leaving the file open: after a few hundred, macOS refuses to open more.)"""
+    def __exit__(self, *exc):
+        try:
+            return super().__exit__(*exc)
+        finally:
+            self.close()
+
+
 def connect():
-    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False)
+    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False, factory=_Connection)
     con.row_factory = sqlite3.Row
     return con
 
