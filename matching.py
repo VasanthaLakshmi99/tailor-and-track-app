@@ -11,7 +11,7 @@ Different spellings count as the same skill: "k8s" = "Kubernetes",
 "Amazon Web Services" = "AWS", "CI/CD" = "continuous integration", etc.
 This is an estimate to sort jobs - not an employer's ATS score.
 """
-VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import re
 
 # canonical name: other spellings
@@ -250,7 +250,9 @@ def title_score(title, resume_text, roles=()):
                                     "analyst", "partner", "advisor", "coordinator", "assistant", "director"}
     if not t:
         return 50
-    head = (resume_text or "")[:400]
+    text = resume_text or ""
+    cut = re.search(r"\n\s*(summary|profile|professional summary|career summary|objective)\s*\n", text, re.I)
+    head = text[:min(cut.start() if cut else 300, 300)]          # name + headline only, not the summary
     own = set(_title_words(" ".join(roles or ()) + " " + head))
     for line in (resume_text or "").splitlines():            # past job titles: lines with dates
         if re.search(r"(19|20)\d{2}\s*[–—-]", line) or re.search(r"[—–|].*(manager|executive|engineer|lead|analyst)", line, re.I):

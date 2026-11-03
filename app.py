@@ -1,5 +1,6 @@
 """Tailor&Track - run with:  streamlit run app.py"""
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -18,7 +19,7 @@ import autotailor
 st.set_page_config(page_title="Tailor&Track", page_icon="🧵", layout="wide")
 
 # ---------------------------------------------------------------- are all files from the same update?
-VERSION = "2026-11-02a"
+VERSION = "2026-11-03a"
 _old = [f"{m.__name__}.py" for m in (db, matching, collectors, api_server, tailor, report, autotailor, sponsors)
         if getattr(m, "VERSION", None) != VERSION]
 if _old:
@@ -87,6 +88,34 @@ def profile_banner():
     else:
         note = "" if db.role_list(P) else " (read from the resume)"
         st.caption(f"👤 **{P['name']}** · resume: {P['filename']} · {roles_text(roles)}{note}")
+
+
+def collect_filters():
+    """Where, which kind of jobs and how many: used by Collect now and the automatic runs."""
+    with st.container(border=True):
+        f1, f2, f3 = st.columns([3, 2, 1.2])
+        current = collectors.locations_for(P)
+        options = ["Remote"] + sorted(collectors.COUNTRIES) + [c for c in current if c != "Remote" and c not in collectors.COUNTRIES]
+        locs = f1.multiselect("📍 Locations (pick several: countries, Remote, or type a city and press Enter)", options,
+                              default=[c for c in current if c in options], key=f"locs_{PID}", accept_new_options=True,
+                              help="Every country's job boards are searched, and jobs in any of these places are kept. "
+                                   "Add Remote to also keep remote jobs open to these countries.")
+        if locs and [l.lower() for l in locs] != [c.lower() for c in current]:
+            db.update_profile(PID, P["name"], P["roles"] or "", ", ".join(locs))
+            st.rerun()
+        modes = list(collectors.MATCH_MODES)
+        mode = f2.selectbox("🎯 Which jobs", modes, index=modes.index(collectors.match_mode(P)),
+                            format_func=collectors.MATCH_MODES.get, key=f"mode_{PID}",
+                            help="Only target roles: job title must match a target role. "
+                                 "+ related: also similar titles with 50%+ skills match. "
+                                 "Any job my skills match: any title with 60%+ skills match (most jobs).")
+        if mode != collectors.match_mode(P):
+            db.set_setting(f"match_mode_{PID}", mode)
+        tgt = f3.number_input("🔢 Jobs wanted", 0, 200, collectors.target_jobs(), 5, key="target_jobs_in",
+                              help="If fewer new jobs were posted in the Date posted time, Collect now adds the newest "
+                                   "slightly older ones (up to 7 days) until it has this many. 0 = off.")
+        if tgt != collectors.target_jobs():
+            db.set_setting("target_jobs", str(tgt))
 
 
 def roles_text(roles):
@@ -322,6 +351,11 @@ def collection_settings():
             for k, v in vals.items():
                 db.set_setting(k, v.strip())
             st.success("Saved. Click Collect now.")
+    jp = st.number_input("JSearch pages per search (10 jobs each)", 1, 10, collectors.jsearch_pages(), 1,
+                         help="More pages = more LinkedIn / Indeed / Google Jobs results. Watch your usage on the RapidAPI "
+                              "dashboard: the free plan has 200 searches a month.")
+    if jp != collectors.jsearch_pages():
+        db.set_setting("jsearch_pages", str(jp))
     st.caption("No key needed: Arbeitsagentur (Germany), Arbetsförmedlingen (Sweden), company career sites and the remote-job feeds. "
                "Naukri, LinkedIn and Indeed have no free public API, so use the J button on their pages.")
 
@@ -528,7 +562,7 @@ def find_jobs_page():
         st.markdown("**J button** · LinkedIn, Dice, ZipRecruiter and any job site")
         st.caption("🟢 Connected" if RECEIVER == "running" else "🟠 Another Tailor&Track window is open")
         st.button("🔄 Refresh list", help="Click after saving jobs with the J button")
-    with right.container(border=True, height=215):
+    with right.container(border=True, height=265):
         last = collectors.last_summary()
         nxt = collectors.next_collect()
         auto_txt = (f" · auto every {collectors.collect_every()} h, next {nxt.strftime('%H:%M')}"
@@ -539,8 +573,9 @@ def find_jobs_page():
                        "Click 🔄 Refresh list in 2–3 minutes to see the new jobs.")
         elif last:
             mine = last.get("by_profile", {}).get(P["name"], 0)
-            st.caption(f"Last run {last.get('finished', '')[:16]} · **{mine} new for {P['name']}** · "
-                       f"{last['found']} new jobs checked · {len(last.get('errors') or [])} problem(s)")
+            st.caption(f"Last run {last.get('finished', '')[:16]} · **{mine} new for {P['name']}**"
+                       + (f" ({last['topped_up']} slightly older, to reach {last.get('target')})" if last.get("topped_up") else "")
+                       + f" · {last['found']} new jobs checked · {len(last.get('errors') or [])} problem(s)")
         else:
             st.caption("Not run yet. Click Collect now: Tailor&Track reads the resume and searches for you.")
         h = time_filter("Date posted", "date_posted_collect", collectors.window_hours(),
@@ -555,6 +590,7 @@ def find_jobs_page():
             st.caption(f"Resume: {matching.years_of_experience(P.get('text') or '') or '?'} years. Jobs whose JD asks for "
                        "years outside this range are skipped. Jobs that don't mention years are kept.")
         go = d2.button("Collect now", type="primary", width="stretch")
+    collect_filters()
     if go:
         collect_now()
         st.rerun()
@@ -590,6 +626,142 @@ def find_jobs_page():
 """)
 
 
+# ---------------------------------------------------------------- LinkedIn-style filters for the job list
+EXP_LEVELS = [("Internship / Entry level", 0, 1), ("Associate", 2, 3), ("Mid-Senior level", 4, 7),
+              ("Senior", 8, 11), ("Director / Executive", 12, 99)]
+WORKPLACES = ["Remote", "Hybrid", "On-site", "Not stated"]
+JOB_TYPES = ["Full-time", "Contract", "Part-time", "Temporary", "Internship", "Not stated"]
+SORTS = ["Most relevant", "Most recent", "Experience: low to high", "Company A–Z"]
+
+
+def workplace(j):
+    text = f"{j.get('location') or ''} {j.get('title') or ''}".lower()
+    head = (j.get("jd") or "")[:800].lower()
+    if "hybrid" in text or re.search(r"\bhybrid\b", head):
+        return "Hybrid"
+    if re.search(r"remote|work from home|wfh|anywhere", text) or re.search(r"\bfully remote\b|100% remote", head):
+        return "Remote"
+    return "On-site" if (j.get("location") or "").strip() else "Not stated"
+
+
+def job_type(j):
+    text = f"{j.get('title') or ''} {(j.get('jd') or '')[:1500]}".lower()
+    for label, pat in (("Internship", r"\bintern(ship)?\b|placement year|graduate scheme"),
+                       ("Contract", r"\bcontract(or)?\b|\bc2c\b|\bfixed[- ]term\b|\bftc\b|\binterim\b|freelance|day rate"),
+                       ("Temporary", r"\btemporary\b|\btemp\b|seasonal"),
+                       ("Part-time", r"\bpart[- ]time\b"),
+                       ("Full-time", r"\bfull[- ]time\b|\bpermanent\b|\bperm\b")):
+        if re.search(pat, text):
+            return label
+    return "Not stated"
+
+
+def exp_level(need):
+    if need is None:
+        return "Not stated"
+    return next(name for name, lo, hi in EXP_LEVELS if lo <= need <= hi)
+
+
+def job_country(j):
+    there = collectors.countries_in(j.get("location") or "")
+    if there:
+        return sorted(there)[0]
+    return "Remote" if "remote" in (j.get("location") or "").lower() else "Other / not stated"
+
+
+def linkedin_filters(saved):
+    """A filter bar like LinkedIn's job search: search box, then one button per filter. Returns the filtered jobs."""
+    k = f"wf_{PID}_"
+    for j in saved:
+        j["need"] = matching.jd_years(j["jd"] or "")
+        j["_level"], j["_place"], j["_type"], j["_country"] = exp_level(j["need"]), workplace(j), job_type(j), job_country(j)
+        j["visa"] = visa_cell(j) if sponsors.needs_visa(P) else ""
+
+    def opts(field):
+        counts = {}
+        for j in saved:
+            counts[j[field]] = counts.get(j[field], 0) + 1
+        return counts
+
+    def label(name, chosen):
+        if not chosen:
+            return name
+        shown = chosen if isinstance(chosen, str) else (chosen[0] if len(chosen) == 1 else f"{len(chosen)}")
+        return f"● {name}: {shown}"
+
+    query = st.text_input("Search", key=k + "q", placeholder="🔍 Search by title, skill, company or location",
+                          label_visibility="collapsed")
+    st.session_state.setdefault(k + "date", "Any time")
+    row1 = st.columns(6, gap="small")
+    row2 = st.columns(6, gap="small")
+
+    def multi(col, name, field, key, order=None, help=None):
+        counts = opts(field)
+        options = [o for o in (order or sorted(counts)) if o in counts]
+        cur = [c for c in st.session_state.get(k + key, []) if c in options]
+        with col.popover(label(name, cur), width="stretch"):
+            st.pills(name, options, selection_mode="multi", key=k + key,
+                     format_func=lambda o: f"{o} ({counts.get(o, 0)})", help=help)
+        return st.session_state.get(k + key) or []
+
+    with row1[0].popover(label("Date posted", None if st.session_state[k + "date"] == "Any time"
+                                 else st.session_state[k + "date"]), width="stretch"):
+        st.radio("Date posted", ["Any time"] + list(collectors.WINDOWS), key=k + "date")
+    levels = multi(row1[1], "Experience level", "_level", "level", [n for n, _, _ in EXP_LEVELS] + ["Not stated"],
+                   help="From the years the JD asks for. Entry 0–1, Associate 2–3, Mid-Senior 4–7, Senior 8–11, Director 12+.")
+    countries = multi(row1[2], "Location", "_country", "country")
+    places = multi(row1[3], "Remote", "_place", "place", WORKPLACES)
+    types = multi(row1[4], "Job type", "_type", "type", JOB_TYPES)
+    companies = multi(row1[5], "Company", "company", "company")
+    with row2[0].popover(label("Match", None if not st.session_state.get(k + "match") else
+                               f"{st.session_state[k + 'match']}%+"), width="stretch"):
+        st.select_slider("Match score at least", [0, 30, 40, 50, 60, 70, 80, 90], key=k + "match",
+                         format_func=lambda v: "Any" if v == 0 else f"{v}%+")
+    visa = []
+    if sponsors.needs_visa(P):
+        visa_counts = {}
+        for j in saved:
+            v = "✅ Sponsor" if j["visa"].startswith(("✅", "🟡")) else "❌ No sponsorship" if j["visa"].startswith(("❌", "⚠")) \
+                else "❔ Not mentioned"
+            j["_visa"] = v
+        visa = multi(row2[1], "Visa", "_visa", "visa", ["✅ Sponsor", "❔ Not mentioned", "❌ No sponsorship"],
+                     help=f"{P['name']} needs sponsorship for: {', '.join(sponsors.needs_visa(P))}")
+    sources = multi(row2[2], "Source", "source", "source")
+    with row2[3].popover(label("Sort", None if st.session_state.get(k + "sort", SORTS[0]) == SORTS[0]
+                               else st.session_state[k + "sort"]), width="stretch"):
+        st.radio("Sort by", SORTS, key=k + "sort")
+    if row2[5].button("↺ Reset", width="stretch", help="Clear every filter"):
+        for key in [x for x in st.session_state if str(x).startswith(k)]:
+            del st.session_state[key]
+        st.rerun()
+
+    out = saved
+    if query.strip():
+        words = query.lower().split()
+        out = [j for j in out if all(w in f"{j['title']} {j['company']} {j.get('location') or ''} {j['jd'] or ''}".lower()
+                                     for w in words)]
+    hours = collectors.WINDOWS.get(st.session_state[k + "date"])
+    if hours:
+        out = [j for j in out if _age_hours(j) <= hours]
+    for chosen, field in ((levels, "_level"), (countries, "_country"), (places, "_place"), (types, "_type"),
+                          (companies, "company"), (visa, "_visa"), (sources, "source")):
+        if chosen:
+            out = [j for j in out if j.get(field) in chosen]
+    if st.session_state.get(k + "match"):
+        out = [j for j in out if (j["match"] or 0) >= st.session_state[k + "match"]]
+    sort = st.session_state.get(k + "sort", SORTS[0])
+    if sort == "Most recent":
+        out = sorted(out, key=_age_hours)
+    elif sort == "Experience: low to high":
+        out = sorted(out, key=lambda j: (j["need"] is None, j["need"] or 0))
+    elif sort == "Company A–Z":
+        out = sorted(out, key=lambda j: (j["company"] or "").lower())
+    active = sum(bool(x) for x in (query.strip(), hours, levels, countries, places, types, companies, visa, sources,
+                                   st.session_state.get(k + "match")))
+    row2[4].markdown(f"**{len(out)}** of {len(saved)} jobs" + (f"  \n{active} filter(s) on" if active else ""))
+    return out
+
+
 def jobs_waiting_table():
     """Saved jobs for this profile, best match first, with the JD and delete options."""
     saved = sorted(db.jobs(PID, status="new"), key=lambda j: j["match"] or 0, reverse=True)
@@ -602,41 +774,18 @@ def jobs_waiting_table():
         st.caption("No jobs yet. Use the J button, or click Collect now.")
         return
 
-    f1, f2, f3 = st.columns([2.2, 1.6, 1.8])
-    with f1:
-        show = time_filter("Date posted", f"waiting_date_{PID}", None, allow_any=True,
-                           help="Shows only jobs posted in this time (or saved in it, when the posting date is unknown).")
-    with f2:
-        min_match = st.select_slider("Match score", options=[0, 30, 40, 50, 60, 70, 80, 90], value=0,
-                                     format_func=lambda v: "Any" if v == 0 else f"{v}%+", key=f"waiting_match_{PID}",
-                                     help="Shows only jobs with at least this match %. Nothing is deleted.")
-    with f3:
-        e1, e2 = st.columns(2)
-        exp_lo = e1.number_input("Exp. from", 0, 30, 0, 1, key=f"wexp_lo_{PID}", help="Years the JD asks for")
-        exp_hi = e2.number_input("to", 0, 30, 30, 1, key=f"wexp_hi_{PID}")
-    show_visa = bool(sponsors.needs_visa(P))
-    visa_only = visa_hide_no = False
-    if show_visa:
-        v = st.radio("Visa sponsorship", ["All jobs", "Hide ❌ / ⚠️", "Sponsors only ✅"], horizontal=True,
-                     key=f"visa_filter_{PID}", help=f"{P['name']} needs sponsorship for: {', '.join(sponsors.needs_visa(P))}")
-        visa_only, visa_hide_no = v.startswith("Sponsors"), v.startswith("Hide")
-    for j in saved:
-        j["need"] = matching.jd_years(j["jd"] or "")
-    if show is not None:
-        saved = [j for j in saved if _age_hours(j) <= show]
-    if min_match:
-        saved = [j for j in saved if (j["match"] or 0) >= min_match]
-    if (exp_lo, exp_hi) != (0, 30):
-        saved = [j for j in saved if j["need"] is None or exp_lo <= j["need"] <= exp_hi]
+    saved = linkedin_filters(saved)
     if not saved:
-        st.caption("No waiting jobs match these filters. Change Date posted, Match score or Experience.")
+        st.info("No waiting jobs match these filters. Change a filter above or click ↺ Reset.")
         return
 
     roles = db.roles_for_search(P)
     for j in saved:
         j["posted"] = _ago(j.get("posted_at")) if j.get("posted_at") else "saved " + _ago(j.get("saved_at"))
         fit = matching.title_fit(j["title"], roles) if roles else None
-        j["fit"] = ("✓ " + fit) if fit else ("⚠ not a target role" if roles else "")
+        kind = collectors.role_kind(j, P) if roles and not fit else None
+        j["fit"] = ("✓ " + fit) if fit else ("≈ related role" if kind == "related" else
+                                             "skills match" if kind == "other" else "⚠ not a target role" if roles else "")
         j["warning"] = j["warning"] or ""
         j["jd_short"] = " ".join((j["jd"] or "").split())[:400] or "— no JD yet: open the job and click J"
         j["exp"] = f"{j['need']}+ yrs" if j["need"] is not None else "—"
@@ -652,13 +801,7 @@ def jobs_waiting_table():
             st.session_state["deleted_msg"] = f"Deleted {len(low)} low-match jobs."
             st.rerun()
 
-    if visa_only:
-        saved = [j for j in saved if j["visa"].startswith(("✅", "🟡"))]
-    elif visa_hide_no:
-        saved = [j for j in saved if not j["visa"].startswith(("❌", "⚠"))]
-    if not saved:
-        st.info("No jobs match these filters.")
-        return
+    show_visa = bool(sponsors.needs_visa(P))
     cols = ["id", "company", "title", "fit", "match", "exp"] + (["visa"] if show_visa else []) + \
         ["posted", "jd_short", "source", "apply_url"] + \
         (["warning"] if any(j["warning"] for j in saved) else [])

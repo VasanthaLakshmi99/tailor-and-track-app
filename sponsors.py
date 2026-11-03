@@ -4,7 +4,7 @@
    about 120,000 employers). Tailor&Track downloads it once a week and checks every company against it.
 2. Any country: what the JD itself says ("visa sponsorship available" / "unable to sponsor").
 """
-VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import csv
 import io
 import re

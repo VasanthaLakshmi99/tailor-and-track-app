@@ -4,7 +4,7 @@ Listens only on 127.0.0.1:8765 (your own laptop). The extension sends the job
 it read from the page; this file checks duplicates and saves it with db.py.
 app.py starts it automatically - you never run this file yourself.
 """
-VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer

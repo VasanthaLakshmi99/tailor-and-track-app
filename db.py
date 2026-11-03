@@ -6,7 +6,7 @@ Back it up by copying that file.
 Every job belongs to a PROFILE (one candidate). Duplicates are checked per
 profile, so applying for candidate A never blocks candidate B.
 """
-VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import difflib
 import io
 import json
@@ -361,7 +361,8 @@ def job_key(url, company):
         m = re.search(r"/job-detail/([0-9a-fA-F-]{8,})", path)
         if m:
             return f"dice:{m.group(1).lower()}"
-    clean = (host.replace("www.", "") + path.rstrip("/")).lower()
+    frag = u.fragment if re.search(r"\d", u.fragment or "") else ""      # "jobs.agency.com/#/jobs/501" (Bullhorn)
+    clean = (host.replace("www.", "") + path.rstrip("/") + ("#" + frag if frag else "")).lower()
     return f"{norm_company(company)}|{clean}" if clean else f"{norm_company(company)}|manual|{now()}"
 
 

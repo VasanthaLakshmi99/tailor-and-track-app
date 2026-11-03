@@ -12,7 +12,7 @@ automatic collection and it can get accounts blocked. Use the J button there.
 Each job is kept for a profile only if its title fits the profile's target roles and
 (if set) its locations. Every job goes through the normal duplicate check.
 """
-VERSION = "2026-11-02a"   # all Tailor&Track files must have the same version
+VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import html
 import json
 import re
@@ -40,6 +40,22 @@ def window_hours():
         return h if h > 0 else WINDOW_HOURS
     except ValueError:
         return WINDOW_HOURS
+
+
+_FETCH = {"hours": None}      # set by run(): how far back the job feeds search (wider when topping up)
+TOPUP_HOURS = 168            # look back up to 7 days to reach the target number of jobs
+
+
+def fetch_hours():
+    return _FETCH["hours"] or window_hours()
+
+
+def target_jobs():
+    """New jobs wanted per profile per Collect (topped up with slightly older jobs). 0 = off."""
+    try:
+        return int(float(db.setting("target_jobs", "30") or 30))
+    except ValueError:
+        return 30
 
 
 def window_label(h=None):
@@ -266,6 +282,13 @@ KEY_FEEDS = {"jooble": ("jooble_key",), "jsearch": ("rapidapi_key",), "usajobs":
              "reed": ("reed_key",), "francetravail": ("ft_id", "ft_secret"), "findwork": ("findwork_key",)}
 COUNTRY_FEEDS = {"usajobs": "United States", "reed": "United Kingdom", "arbeitsagentur": "Germany",
                  "jobtech": "Sweden", "francetravail": "France"}   # official job boards of one country   # optional free keys
+def jsearch_pages():
+    """Pages per JSearch search (10 jobs each). Check your RapidAPI usage page: if one search with more pages
+    counts as several searches, lower this so the free 200 a month last."""
+    try:
+        return max(1, min(10, int(db.setting("jsearch_pages", "3") or 3)))
+    except ValueError:
+        return 3
 JSEARCH_TERMS = 3   # free plan = 200 searches a month, so only the top 3 roles, 1 page each (about 90 a month)   # need a free API key
 SNIPPET_SOURCES = {"Jooble", "Reed"}
 TITLE_ONLY_OK = {"Arbeitsagentur"}   # official board; if its JD can't be read, the title decides   # these give a short JD; the full JD comes when you open the job with J
@@ -825,7 +848,7 @@ def fetch_usajobs(search_terms):
     """USAJOBS (US government jobs): free official API, key at developer.usajobs.gov (your email + key)."""
     headers = {"Host": "data.usajobs.gov", "User-Agent": db.setting("usajobs_email"),
                "Authorization-Key": db.setting("usajobs_key")}
-    days = max(1, min(60, int(-(-window_hours() // 24))))
+    days = max(1, min(60, int(-(-fetch_hours() // 24))))
     out, seen = [], set()
     for term in search_terms:
         r = requests.get("https://data.usajobs.gov/api/search", headers=headers, timeout=30,
@@ -851,7 +874,7 @@ def fetch_usajobs(search_terms):
 
 
 def _recent_days():
-    return max(1, int(-(-window_hours() // 24)))
+    return max(1, int(-(-fetch_hours() // 24)))
 
 
 def fetch_reed(search_terms):
@@ -936,7 +959,7 @@ def _arbeitsagentur_jd(detail_url):
 
 def fetch_jobtech(search_terms):
     """Arbetsförmedlingen / JobTech (Sweden's official job board): free, no key."""
-    after = (datetime.now() - timedelta(hours=window_hours())).strftime("%Y-%m-%dT%H:%M:%S")
+    after = (datetime.now() - timedelta(hours=fetch_hours())).strftime("%Y-%m-%dT%H:%M:%S")
     out, seen = [], set()
     for term in search_terms:
         r = requests.get("https://jobsearch.api.jobtechdev.se/search", headers={**UA, "accept": "application/json"},
@@ -1039,7 +1062,7 @@ def fetch_jooble(search_terms, location="United States"):
     iso2 = COUNTRIES.get(location, ("us",))[0]
     hosts = ["jooble.org"] if iso2 == "us" else [f"{JOOBLE_SITE.get(iso2, iso2)}.jooble.org", "jooble.org"]
     out, seen = [], set()
-    day = (datetime.now(timezone.utc) - timedelta(hours=window_hours())).strftime("%Y-%m-%d")
+    day = (datetime.now(timezone.utc) - timedelta(hours=fetch_hours())).strftime("%Y-%m-%d")
     for term in search_terms:
         for host in hosts:
             try:
@@ -1076,9 +1099,9 @@ def fetch_jsearch(search_terms, country="us", where="USA"):
     out, seen = [], set()
     for term in search_terms[:JSEARCH_TERMS]:
         r = requests.get("https://jsearch.p.rapidapi.com/search", headers=headers, timeout=30,
-                         params={"query": f"{term} in {where}", "date_posted": "today" if window_hours() <= 24 else "3days" if window_hours() <= 72 else
-                                               "week" if window_hours() <= 168 else "month", "country": country,
-                                 "page": 1, "num_pages": 1})
+                         params={"query": f"{term} in {where}", "date_posted": "today" if fetch_hours() <= 24 else "3days" if fetch_hours() <= 72 else
+                                               "week" if fetch_hours() <= 168 else "month", "country": country,
+                                 "page": 1, "num_pages": jsearch_pages()})
         if r.status_code in (401, 403):
             raise RuntimeError("API key not accepted: check the RapidAPI key and that you subscribed to JSearch (free plan)")
         if r.status_code == 429:
@@ -1094,7 +1117,7 @@ def fetch_jsearch(search_terms, country="us", where="USA"):
             if j.get("job_is_remote"):
                 place = f"{place} (Remote)".strip()
             out.append({"company": j.get("employer_name", ""), "title": j.get("job_title", ""),
-                        "location": place or "United States", "url": url, "jd": _text(j.get("job_description")),
+                        "location": place or where, "url": url, "jd": _text(j.get("job_description")),
                         "posted": _when(j.get("job_posted_at_datetime_utc") or j.get("job_posted_at_timestamp")),
                         "source": "JSearch"})
         time.sleep(PAUSE)
@@ -1453,25 +1476,61 @@ def fits(job, p, since):
 
 
 def skills_ok(job, p):
-    """The job's skills must overlap with the resume (checked once the full JD is known)."""
+    """The job's skills must overlap with the resume (checked once the full JD is known).
+    Target roles: 30%+. Related titles: 50%+. Other titles ('any job my skills match'): 60%+."""
     jd = job.get("jd") or ""
+    kind = job.get("_kind_" + str(p.get("id"))) or "target"
     if not jd.strip() and job.get("source") in TITLE_ONLY_OK:   # the JD comes when you open the job with J
-        return True
+        return kind == "target"
     need = 1 if job.get("source") in SNIPPET_SOURCES else 3   # Jooble only gives a few lines of the JD
     if len(matching.find_skills(jd, strict=True)) < need:     # too few real skills to judge the fit
         return False
     pct, _, _ = matching.score(jd, db.scoring_text(p))
-    return pct >= MIN_MATCH
+    return pct >= {"target": MIN_MATCH, "related": RELATED_MIN}.get(kind, SKILLS_MIN)
+
+
+MATCH_MODES = {"roles": "Only my target roles",
+               "related": "Target roles + related roles (recommended)",
+               "skills": "Any job my skills match"}
+RELATED_MIN = 50       # related job titles need at least this skills match
+SKILLS_MIN = 60        # 'any job my skills match' needs at least this skills match
+_TECH_CACHE = {}
+
+
+def match_mode(p):
+    return db.setting(f"match_mode_{(p or {}).get('id')}", "related") or "related"
+
+
+def _profile_is_tech(p):
+    text = (p or {}).get("text") or ""
+    key = ((p or {}).get("id"), len(text))
+    if key not in _TECH_CACHE:
+        _TECH_CACHE[key] = matching.is_tech(text)
+    return _TECH_CACHE[key]
+
+
+def role_kind(job, p):
+    """'target' (fits a target role), 'related' (similar title), 'other', or None (not the profile's field at all)."""
+    title = job.get("title") or ""
+    roles = db.roles_for_search(p)
+    if _profile_is_tech(p) and NOT_TECH_ROLE.search(title):
+        return None                                          # sales / HR / legal jobs for a tech profile
+    inner = " ".join(re.findall(r"\(([^)]+)\)", title))     # "IT Specialist (DevOps Engineer)" on USAJOBS
+    if matching.title_fit(title, roles) or (inner and matching.title_fit(inner, roles)):
+        return "target"
+    if matching.title_score(title, (p or {}).get("text") or "", roles) >= 50:
+        return "related"
+    return "other"
 
 
 def wrong_fit(job, p):
-    """Why a job doesn't fit the profile's main roles / level / location (None = fits)."""
-    title = job.get("title") or ""
-    roles = db.roles_for_search(p)
-    inner = " ".join(re.findall(r"\(([^)]+)\)", title))     # "IT Specialist (DevOps Engineer)" on USAJOBS
-    if NOT_TECH_ROLE.search(title) or not (matching.title_fit(title, roles) or (inner and matching.title_fit(inner, roles))):
+    """Why a job doesn't fit the profile's roles / level / location (None = fits).
+    Match mode (Profiles page): target roles only, + related roles, or any job the skills match."""
+    kind, mode = role_kind(job, p), match_mode(p)
+    job["_kind_" + str(p.get("id"))] = kind
+    if kind is None or (kind == "other" and mode != "skills") or (kind == "related" and mode == "roles"):
         return "not a resume role"
-    if not level_ok(title, matching.years_of_experience((p or {}).get("text") or "")):
+    if not level_ok(job.get("title") or "", matching.years_of_experience((p or {}).get("text") or "")):
         return "wrong level"
     loc = job.get("location") or ""
     if job.get("source") == "Arbeitnow" and "europe" not in loc.lower():
@@ -1507,10 +1566,13 @@ def _count(summary, source, reason):
     src[reason] = src.get(reason, 0) + 1
 
 
-def _save_for_profiles(jobs, profiles, since, source, summary):
+def _save_for_profiles(jobs, profiles, since, source, summary, strict_since=None, target=0):
     for job in jobs:
-        _count(summary, source, "posted recently")
+        older = bool(strict_since is not None and job.get("posted") and job["posted"] < strict_since)
+        _count(summary, source, "older, to reach target" if older else "posted recently")
         for p in profiles:
+            if older and summary["by_profile"].get(p["name"], 0) >= target:
+                continue                                   # enough new jobs already: older ones aren't needed
             why = wrong_fit(job, p)
             if why:
                 _count(summary, source, why)
@@ -1542,6 +1604,8 @@ def _save_for_profiles(jobs, profiles, since, source, summary):
             summary[key] += 1
             _count(summary, source, "saved" if key == "new" else "duplicate blocked")
             summary["by_profile"][p["name"]] = summary["by_profile"].get(p["name"], 0) + (key == "new")
+            if key == "new" and older:
+                summary["topped_up"] = summary.get("topped_up", 0) + 1
 
 
 def run(progress=None, auto=False):
@@ -1556,7 +1620,12 @@ def run(progress=None, auto=False):
         hours = window_hours()
         if auto:
             hours = max(hours, collect_every() + 1)      # never miss jobs posted between two runs
-        since = datetime.now(timezone.utc) - timedelta(hours=hours)
+        strict = datetime.now(timezone.utc) - timedelta(hours=hours)
+        target = target_jobs()
+        wide = max(hours, TOPUP_HOURS) if target else hours
+        since = datetime.now(timezone.utc) - timedelta(hours=wide)       # fetch wider, save newest first
+        _FETCH["hours"] = wide
+        pending = []                                                       # (job, source) from every source
         profiles = [p for p in db.profiles() if db.roles_for_search(p)]
         summary = {"started": db.now(), "found": 0, "new": 0, "duplicates": 0, "low_match": 0, "errors": [], "by_profile": {},
                    "no_roles": [p["name"] for p in db.profiles() if not db.roles_for_search(p)]}
@@ -1590,9 +1659,10 @@ def run(progress=None, auto=False):
                     if err:
                         raise err
                     recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
-                    summary["found"] += len(recent)
-                    _save_for_profiles(recent, profiles, since, SOURCE_NAME[b["provider"]], summary)
-                    _board_status(b["id"], f"OK · {len(jobs)} open · {len(recent)} new")
+                    fresh = len([j for j in recent if j["posted"] >= strict])
+                    summary["found"] += fresh
+                    pending += [(j, SOURCE_NAME[b["provider"]]) for j in recent]
+                    _board_status(b["id"], f"OK · {len(jobs)} open · {fresh} new")
                 except LookupError:
                     _board_status(b["id"], "Not found: switched off (check the link or remove it)")
                     update_board(b["id"], active=False)            # don't slow down the next runs
@@ -1631,18 +1701,27 @@ def run(progress=None, auto=False):
                 recent = [j for j in jobs if j.get("posted") and j["posted"] >= since]
                 _count(summary, FEEDS[f], "jobs received")
                 summary["by_source"][FEEDS[f]]["jobs received"] = len(jobs)
-                summary["found"] += len(recent)
-                _save_for_profiles(recent, profiles, since, FEEDS[f], summary)
+                summary["found"] += len([j for j in recent if j["posted"] >= strict])
+                pending += [(j, FEEDS[f]) for j in recent]
             except requests.ConnectionError:
                 summary["errors"].append(f"{FEEDS[f]}: no internet connection")
             except Exception as e:
                 summary["errors"].append(f"{FEEDS[f]}: {str(e)[:80]}")
+        # newest jobs first; jobs older than 'Date posted' only until each profile has its target number
+        if progress:
+            progress(1.0, f"Checking {len(pending)} jobs against the resume…")
+        pending.sort(key=lambda js: js[0]["posted"], reverse=True)
+        for job, src in pending:
+            _save_for_profiles([job], profiles, since, src, summary, strict_since=strict, target=target)
+        _FETCH["hours"] = None
+        summary["target"] = target
         summary["finished"] = db.now()
         db.set_setting("last_collect", json.dumps(summary))
         db.set_setting("last_collect_day", db.today())
         db.set_setting("last_collect_at", datetime.now().isoformat(timespec="seconds"))
         return summary
     finally:
+        _FETCH["hours"] = None
         _lock.release()
 
 

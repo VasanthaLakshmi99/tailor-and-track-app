@@ -51,6 +51,9 @@ The app must be running for the J button to work.
 1. **Profiles:** set your name, then upload your **master resume** (PDF or DOCX). Target roles and locations are read from the resume automatically, and you can change them.
 2. **Profiles → 📁 Where tailored resumes are saved:** choose a folder. A Google Drive or OneDrive folder saves laptop space.
 3. **Find jobs:** pick **Date posted** (30 min … past month, or Custom) and the **🎓 Experience** range, then click **Collect now**.
+   Under the Collection card pick **📍 Locations** (several countries, Remote, or type cities), **🎯 Which jobs**
+   (only target roles / + related roles / any job your skills match) and **🔢 Jobs wanted** (default 30: if fewer
+   were posted in your Date posted time, the newest slightly older ones, up to 7 days, are added).
    While the app is open it also collects new jobs **every 3 hours** by itself (change it in ⚙️ Collection settings).
    Jobs come from the countries in the resume / profile locations (US, India, UK, Canada, Germany, UAE and more).
 4. **Tailor resumes:** click **⚡ Auto-tailor**. Only tick JD skills you have really used. **📊 ATS check** on each card shows the score and what to fix.
