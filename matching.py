@@ -245,7 +245,7 @@ def score(jd, resume_text, title="", roles=()):
         pct, matched, missing = _dictionary_score(jd, resume_text)
     else:
         matched_k = [k for k in hard if has_keyword(resume_text, k[0], k[1])]
-        pct = round(100 * sum(k[2] for k in matched_k) / sum(k[2] for k in hard))
+        pct = round(100 * sum(k[2] for k in matched_k) / max(1, sum(k[2] for k in hard)))
         if len(hard) < 4:                                   # too few keywords to be sure: don't promise 100%
             pct = min(pct, 60 + 10 * len(hard))
         matched, missing = [k[0] for k in matched_k], [k[0] for k in hard if k not in matched_k]
@@ -289,7 +289,7 @@ def _dictionary_score(jd, resume_text):
     weight = {s: min(n, 3) for s, n in in_jd.items()}
     matched = [s for s in weight if s in in_resume]
     missing = [s for s in weight if s not in in_resume]
-    pct = round(100 * sum(weight[s] for s in matched) / sum(weight.values()))
+    pct = round(100 * sum(weight[s] for s in matched) / max(1, sum(weight.values())))
     by_weight = lambda s: (-weight[s], s.lower())
     return pct, sorted(matched, key=by_weight), sorted(missing, key=by_weight)
 
@@ -578,7 +578,7 @@ def _jd_keywords(jd, resume_text="", company=""):
                 continue
             if tok.lower() in _KNOWN or any(tok.lower() == i[1] for i in items):
                 continue
-            items.append((tok, tok.lower(), min(len(_pattern(tok).findall(low)), 3), "hard", m.start()))
+            items.append((tok, tok.lower(), max(1, min(len(_pattern(tok).findall(low)), 3)), "hard", m.start()))
     for t, p in _SOFT_PATTERNS.items():
         n = len(p.findall(low))
         if n:
@@ -591,7 +591,7 @@ def _jd_keywords(jd, resume_text="", company=""):
         if " " not in key and any(key != k and re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", k) for k in keys):
             continue                     # "automation" when "automation testing" is there too
         seen.add(key)
-        out.append((disp.strip(), key, w, kind))
+        out.append((disp.strip(), key, max(1, w), kind))
     return tuple(out)
 
 
@@ -631,8 +631,8 @@ def ats_report(jd, resume_text, job_title="", company=""):
 
     got = {k[1]: count(k[0], k[1]) for k in hard}
     # a keyword the JD repeats should be in the resume more than once (skills list + work experience)
-    hard_pts = sum(k[2] * min(1.0, got[k[1]] / min(k[2], 2)) for k in hard)
-    hard_pct = round(100 * hard_pts / sum(k[2] for k in hard)) if hard else 0
+    hard_pts = sum(k[2] * min(1.0, got[k[1]] / max(1, min(k[2], 2))) for k in hard)
+    hard_pct = round(100 * hard_pts / max(1, sum(k[2] for k in hard))) if hard else 0
     missing = [k[0] for k in hard if not got[k[1]]]
     too_few = [k[0] for k in hard if got[k[1]] and got[k[1]] < min(k[2], 2)]
     soft_pct = round(100 * sum(1 for k in soft if count(k[0], k[1])) / len(soft)) if soft else 100
