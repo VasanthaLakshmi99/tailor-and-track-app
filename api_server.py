@@ -98,7 +98,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if self.path == "/check":
             if company.strip() and title.strip():
-                level, message = db.check_duplicate(pid, company, title, url)
+                level, message = db.check_duplicate(pid, company, title, url, jd)
             else:  # still give the match %, the user can type the missing field
                 level, message = "error", "Fill in company name and role title"
             out = {"level": level, "message": message}

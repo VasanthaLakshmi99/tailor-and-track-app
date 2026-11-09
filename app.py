@@ -723,6 +723,7 @@ def linkedin_filters(saved):
     """A filter bar like LinkedIn's job search: search box, then one button per filter. Returns the filtered jobs."""
     k = f"wf_{PID}_"
     for j in saved:
+        j["source"], j["company"] = j.get("source") or "Not stated", j.get("company") or "Not stated"
         j["need"] = matching.jd_years(j["jd"] or "")
         j["_level"], j["_place"], j["_type"], j["_country"] = exp_level(j["need"]), workplace(j), job_type(j), job_country(j)
         j["visa"] = visa_cell(j) if sponsors.needs_visa(P) else ""
@@ -825,6 +826,34 @@ def linkedin_filters(saved):
     return out
 
 
+def recycle_bin():
+    """Deleted jobs (Keep only these, Delete low matches, delete ticks): restore them within 30 days."""
+    gone = db.trash_list(PID)
+    with st.expander(f"🗑 Recently deleted ({len(gone)}) · restore jobs you deleted"):
+        if gone:
+            df = pd.DataFrame([{"restore": False, "id": g["id"], "company": g["company"], "title": g["title"],
+                                "deleted": (g["deleted_at"] or "")[:16]} for g in gone])
+            ed = st.data_editor(df, hide_index=True, width="stretch", key=f"trash_{PID}",
+                                disabled=["company", "title", "deleted"],
+                                column_config={"restore": st.column_config.CheckboxColumn("Restore"), "id": None})
+            pick = [int(i) for i in ed.loc[ed["restore"], "id"]]
+            c1, c2 = st.columns(2)
+            if c1.button(f"↩ Restore {len(pick)} ticked", disabled=not pick, width="stretch", key=f"trash_go_{PID}"):
+                st.session_state["deleted_msg"] = f"Restored {db.restore_jobs(pick)} job(s) to Jobs waiting."
+                st.rerun()
+            if c2.button(f"↩ Restore all {len(gone)}", width="stretch", key=f"trash_all_{PID}"):
+                st.session_state["deleted_msg"] = f"Restored {db.restore_jobs([g['id'] for g in gone])} job(s)."
+                st.rerun()
+        else:
+            st.caption("Nothing deleted in the last 30 days (jobs deleted before this update are not in the bin).")
+        st.caption("Jobs deleted **before this update** can't be restored, but you can let Collect find them again "
+                   "(set Date posted far enough back, e.g. Past week, then Collect now).")
+        if st.button("Let Collect find my earlier deleted jobs again", key=f"forget_{PID}"):
+            st.session_state["deleted_msg"] = (f"OK: {db.forget_deleted(PID)} deleted job(s) can be collected again. "
+                                               "Pick a Date posted that covers them and click Collect now.")
+            st.rerun()
+
+
 def jobs_waiting_table():
     """Saved jobs for this profile, best match first, with the JD and delete options."""
     saved = sorted(db.jobs(PID, status="new"), key=lambda j: j["match"] or 0, reverse=True)
@@ -833,6 +862,7 @@ def jobs_waiting_table():
     head.subheader(f"Jobs waiting ({len(saved)})")
     if "deleted_msg" in st.session_state:
         st.success(st.session_state.pop("deleted_msg"))
+    recycle_bin()
     if not saved:
         st.caption("No jobs yet. Use the J button, or click Collect now.")
         return
@@ -1133,8 +1163,9 @@ def tailor_page():
                                               f"{tailor.READY}%+." + (f" Problems: {'; '.join(errors[:3])}" if errors else ""))
             st.rerun()
 
-    st.caption("Manual way: point at a card's grey prompt box and click its **copy** icon (top-right), paste into Claude, "
-               "save as **PDF**, then **⬆️ Upload PDF** on the same card. Files are saved as *Company_Role.pdf*.")
+    st.caption("Best quality (free): on a card, **🤖 Rewrite with Claude / ChatGPT** gives a prompt that rewrites the "
+               "whole resume for the job; paste the AI's answer back and the PDF is built in the master's layout. "
+               "⚡ Auto-tailor is instant but only adds and reorders JD keywords.")
 
     if "tailor_msg" in st.session_state:
         pct, msg = st.session_state.pop("tailor_msg")
@@ -1240,6 +1271,46 @@ def ats_check(rep, tailored):
     st.caption("Same kind of check as Jobscan and similar ATS checkers. Tick only skills the candidate really has.")
 
 
+def ai_rewrite_box(j):
+    """Real rewriting by Claude or ChatGPT (free in the browser): copy the prompt, paste the answer back, get the PDF."""
+    confirmed = db.confirmed_list(P)
+    if db.setting(f"tick_all_{PID}", "0") == "1":            # Tick all: the candidate has the JD's other skills too
+        confirmed = list(dict.fromkeys(confirmed + autotailor.gaps(j, db.scoring_text(P))))
+    st.markdown("**1.** Copy the prompt (copy icon, top right of the box).")
+    st.code(tailor.ai_prompt(j, db.scoring_text(P), confirmed), language=None, wrap_lines=True, height=110)
+    l1, l2 = st.columns(2)
+    l1.link_button("Open Claude ↗", "https://claude.ai/new", width="stretch")
+    l2.link_button("Open ChatGPT ↗", "https://chatgpt.com/", width="stretch")
+    if j.get("ats_json"):
+        rep = json.loads(j["ats_json"])
+        if rep.get("score", 0) < 95:
+            st.warning(f"The tailored resume scores **{rep['score']}** on the ATS check. To get 95+, send this to the "
+                       "same AI chat, then paste its new answer below:")
+            st.code(tailor.improve_prompt(j, rep, confirmed), language=None, wrap_lines=True, height=90)
+            missing_true = [k for k in rep.get("missing", []) if k.lower() not in {c.lower() for c in confirmed}]
+            if missing_true:
+                st.caption("Not added because the candidate hasn't confirmed them (tick them in ⚡ Auto-tailor or switch "
+                           f"on Tick all, only if true): {', '.join(missing_true[:10])}")
+    st.markdown("**2.** Paste it there and send. **3.** Copy the AI's whole answer and paste it here:")
+    answer = st.text_area("AI answer", key=f"ai_ans_{j['id']}", height=160, label_visibility="collapsed",
+                          placeholder="Paste the tailored resume the AI wrote…")
+    if st.button("Build my tailored PDF", type="primary", key=f"ai_go_{j['id']}", width="stretch",
+                 disabled=not answer.strip()):
+        try:
+            path, pct, miss, issues = tailor.save_ai_answer(j, answer, db.scoring_text(P))
+            msg = (f"{j['company']} · {j['title']}: **{path.name}** built from the AI's rewrite. "
+                   f"Match **{pct}%** (was {j['match']}%). Download it in the **Done** tab.")
+            if issues:
+                msg += " ⚠️ Check before sending: " + "; ".join(issues[:4]) + "."
+            st.session_state["tailor_msg"] = (0 if issues else pct, msg)
+            st.session_state.pop(f"ai_ans_{j['id']}", None)
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
+    st.caption("The PDF keeps the master's layout and fonts. Employers, dates and numbers are checked against the "
+               "master resume, and anything new is flagged.")
+
+
 def tailor_card(j):
     tm = j["tailored_match"]
     score = f"{j['match'] or 0}%" + (f" → **{tm}%** {'✅' if (tm or 0) >= tailor.READY else '⚠️'}" if j["resume_file"] else "")
@@ -1253,8 +1324,8 @@ def tailor_card(j):
     else:
         with st.popover("📊 ATS check", width="stretch"):
             ats_check(after or before, tailored=bool(after))
-    st.code(tailor.build_prompt(j, db.scoring_text(P)), language=None, wrap_lines=True, height=90)
-    st.caption(f"Save your PDF as: `{tailor.file_name(j)}`")
+    with st.popover("🤖 Rewrite with Claude / ChatGPT (free)", width="stretch", disabled=not (j["jd"] or "").strip()):
+        ai_rewrite_box(j)
 
     with st.popover("⚡ Auto-tailor this job", width="stretch", disabled=not (j["jd"] or "").strip()):
         gap = [g for g in autotailor.gaps(j, db.scoring_text(P))]
@@ -1274,6 +1345,9 @@ def tailor_card(j):
                 path, pct, miss = tailor.auto_tailor(j, ticked or [], remember=not all_on)
                 msg = (f"{j['company']} · {j['title']}: **{path.name}** created. Match **{pct}%** (was {j['match']}%). "
                        "Download it in the **Done** tab.")
+                if autotailor.to_pdf.pages < autotailor.MIN_PAGES:
+                    msg += (f" It fills {autotailor.to_pdf.pages} pages: the master resume is short. Use **🤖 Rewrite "
+                            "with Claude / ChatGPT** on this card for a 1.5–2 page version.")
                 if pct < tailor.READY and miss:
                     msg += f" Not in the resume yet: {', '.join(miss[:8])}."
                 st.session_state["tailor_msg"] = (pct, msg)
@@ -1345,6 +1419,13 @@ def apply_page():
                "Newest saved": lambda j: j["saved_at"] or "", "Newest applied": lambda j: j["applied_at"] or ""}[sort]
         data.sort(key=key, reverse=True)
 
+    for jid, name, why in st.session_state.get("apply_blocked", []):
+        st.error(f"⛔ **Not marked as applied: {name}.** {why}. Applying again can get the candidate (and you) "
+                 "blocked by the company.")
+        if st.button(f"I checked it, mark {name} as applied anyway", key=f"force_btn_{jid}"):
+            db.mark_applied(jid, True)
+            st.session_state["apply_blocked"] = [x for x in st.session_state["apply_blocked"] if x[0] != jid]
+            st.rerun()
     if "apply_msg" in st.session_state:
         st.success(st.session_state.pop("apply_msg"))
     st.caption(f"{len(data)} job(s). Click **Open** to apply on the company site, then tick **Applied ✓**. "
@@ -1378,11 +1459,23 @@ def apply_page():
             })
         changed = edited[edited["applied"] != df["applied"]]
         if len(changed):
+            by_id = {j["id"]: j for j in data}
+            stopped, n_on, n_off = [], 0, 0
             for row in changed.to_dict("records"):
+                if row["applied"]:
+                    j = by_id.get(row["id"]) or {}
+                    hit = db.applied_conflict(PID, j.get("company"), j.get("title"), j.get("jd") or "", exclude_id=row["id"])
+                    if hit and not st.session_state.get(f"force_apply_{row['id']}"):
+                        stopped.append((row["id"], f"{j.get('company')} · {j.get('title')}", hit[1]))
+                        continue
+                    n_on += 1
+                else:
+                    n_off += 1
                 db.mark_applied(row["id"], bool(row["applied"]))
-            n_on = int(changed["applied"].sum())
+            if stopped:
+                st.session_state["apply_blocked"] = stopped
             st.session_state["apply_msg"] = (f"Marked {n_on} as applied. " if n_on else "") + \
-                                            (f"{len(changed) - n_on} moved back to not applied." if len(changed) - n_on else "")
+                                            (f"{n_off} moved back to not applied." if n_off else "")
             st.rerun()
 
 
@@ -1405,6 +1498,28 @@ def apply_page():
         st.caption("Excel columns: " + ", ".join(report.COLUMNS))
 
     duplicates_box()
+    duplicate_rules_box()
+
+
+def duplicate_rules_box():
+    with st.expander("🔒 Duplicate application rules (strict)"):
+        st.markdown("A job is **blocked** (J button, Collect now, and the Applied ✓ tick) when the candidate already applied:\n"
+                    "1. to the **same company** for the same or a similar role, at any time (AWS = Amazon, "
+                    "JPMorgan Chase = JPMorgan…)\n"
+                    "2. to the **same job description** at any company: agencies re-post their clients' jobs\n"
+                    "3. to **any role at the same company** within the cooldown below")
+        c1, c2 = st.columns(2)
+        strict = c1.toggle("Strict mode", value=db.strict_mode(), key="strict_dupes_t",
+                           help="Off: rule 3 is not used, and a re-posted JD only gives a warning.")
+        days = c2.number_input("Cooldown per company (days)", 0, 365, db.cooldown_days(), 5, key="cooldown_in",
+                               help="0 = no cooldown. Many companies flag several applications within a few weeks.")
+        if strict != db.strict_mode():
+            db.set_setting("strict_dupes", "1" if strict else "0")
+        if days != db.cooldown_days():
+            db.set_setting("company_cooldown", str(int(days)))
+        st.caption("Applications made before Tailor&Track (or outside it) are only known if you import them: "
+                   "Find jobs → 📥 Import (Excel/CSV with company, role, applied date). Import every past "
+                   "application of each candidate so the checks see them.")
 
 
 def duplicates_box():

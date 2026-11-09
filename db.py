@@ -77,6 +77,10 @@ def init_db():
             filename TEXT, data BLOB, text TEXT, uploaded_at TEXT, created_at TEXT
         );
         CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS trash (
+            id INTEGER PRIMARY KEY, profile_id INTEGER, job_id INTEGER, company TEXT, title TEXT,
+            data TEXT, deleted_at TEXT
+        );
         CREATE TABLE IF NOT EXISTS dismissed (
             profile_id INTEGER, job_key TEXT, at TEXT,
             PRIMARY KEY (profile_id, job_key)
@@ -113,12 +117,14 @@ def init_db():
             con.execute("UPDATE removed SET profile_id=?", (first,))
         if "posted_at" not in _columns(con, "jobs"):              # when the company posted the job (UTC, ISO)
             con.execute("ALTER TABLE jobs ADD COLUMN posted_at TEXT")
-        if con.execute("SELECT value FROM settings WHERE key='norm_version'").fetchone() is None \
-                and "company_norm" in _columns(con, "jobs"):
-            for r in con.execute("SELECT id, company, title FROM jobs").fetchall():
-                con.execute("UPDATE jobs SET company_norm=?, title_norm=? WHERE id=?",
-                            (norm_company(r["company"]), norm_title(r["title"]), r["id"]))
-            con.execute("INSERT OR REPLACE INTO settings VALUES('norm_version', '2')")
+        if "jd_sig" not in _columns(con, "jobs"):                # fingerprint of the JD (same job, other link)
+            con.execute("ALTER TABLE jobs ADD COLUMN jd_sig TEXT")
+        nv = con.execute("SELECT value FROM settings WHERE key='norm_version'").fetchone()
+        if (nv is None or nv["value"] != NORM_VERSION) and "company_norm" in _columns(con, "jobs"):
+            for r in con.execute("SELECT id, company, title, jd FROM jobs").fetchall():
+                con.execute("UPDATE jobs SET company_norm=?, title_norm=?, jd_sig=? WHERE id=?",
+                            (norm_company(r["company"]), norm_title(r["title"]), jd_signature(r["jd"]), r["id"]))
+            con.execute("INSERT OR REPLACE INTO settings VALUES('norm_version', ?)", (NORM_VERSION,))
         if con.execute("SELECT value FROM settings WHERE key='extract_version'").fetchone() is None:
             for r in con.execute("SELECT id, filename, data FROM profiles WHERE data IS NOT NULL").fetchall():
                 try:                                            # read saved master resumes again, in page order
@@ -319,15 +325,51 @@ TITLE_SWAPS = {"sr": "senior", "jr": "junior", "mgr": "manager", "engg": "engine
                "eng": "engineer", "dev": "developer"}
 
 
+COMPANY_ALIASES = {      # names that mean the same employer
+    "amazon web services": "amazon", "aws": "amazon", "amazon com": "amazon", "amazon development center": "amazon",
+    "meta platforms": "meta", "facebook": "meta", "alphabet": "google", "google cloud": "google",
+    "jpmorgan chase": "jpmorgan", "jp morgan": "jpmorgan", "jp morgan chase": "jpmorgan", "jpmc": "jpmorgan",
+    "jpmorganchase": "jpmorgan", "international business machines": "ibm", "microsoft corporation": "microsoft",
+    "tata consultancy services": "tcs", "tata consultancy": "tcs", "hcl technologies": "hcltech", "hcl tech": "hcltech",
+    "ernst young": "ey", "pricewaterhousecoopers": "pwc", "pwc us": "pwc", "deloitte consulting": "deloitte",
+    "deloitte touche": "deloitte", "kpmg us": "kpmg", "bank of america merrill lynch": "bank of america",
+    "bofa": "bank of america", "capital one financial": "capital one", "wells fargo bank": "wells fargo",
+    "cognizant technology solutions": "cognizant", "infosys bpm": "infosys", "wipro technologies": "wipro",
+    "tech mahindra americas": "tech mahindra", "salesforce com": "salesforce", "oracle america": "oracle",
+    "general motors company": "general motors", "gm": "general motors", "ford motor": "ford",
+    "unitedhealth group": "unitedhealth", "optum": "unitedhealth", "the home depot": "home depot",
+    "walmart global tech": "walmart", "walmart labs": "walmart", "target corporation": "target",
+}
+
+
 def norm_company(name):
     n = re.sub(r"\(.*?\)", " ", (name or "").lower())        # "Apex Systems (Everforth Apex)" -> "apex systems"
-    words = re.sub(r"[^a-z0-9 ]+", " ", n).split()
+    n = re.split(r"\s+(?:via|through|c/o)\s+|\s+[|/]\s+", n)[0]      # "Acme via Robert Half" -> "acme"
+    words = re.sub(r"[^a-z0-9 ]+", " ", n.replace("&", " ")).split()
     words = [w for w in words if w not in COMPANY_SUFFIXES]
-    return " ".join(words)
+    joined = " ".join(words)
+    for alias, canon in COMPANY_ALIASES.items():
+        if joined == alias or joined.startswith(alias + " "):
+            return canon
+    return joined
+
+
+# trailing parts of a title that say where / how, not what: "DevOps Engineer - Remote", "… | Austin, TX", "… (W2)"
+_TITLE_TAIL = re.compile(r"\s+[-–—|:]\s+(?=[^-–—|:]*$)(?:.*\b(remote|hybrid|on[- ]?site|onsite|contract|contractor|"
+                         r"w2|c2c|1099|full[- ]?time|part[- ]?time|permanent|temporary|temp|usa?|united states|uk|"
+                         r"united kingdom|india|[a-z]+,\s*[a-z]{2}|\d+\s*months?|urgent|immediate|night shift|"
+                         r"day shift)\b.*)$", re.I)
 
 
 def norm_title(title):
-    t = re.sub(r"\(.*?\)", " ", (title or "").lower())      # drop "(Remote)" etc.
+    t = (title or "").lower()
+    for _ in range(3):                                        # "X - Remote - Contract" -> "X"
+        t2 = _TITLE_TAIL.sub("", t)
+        if t2 == t:
+            break
+        t = t2
+    t = re.sub(r"\b(100%\s*)?(remote|hybrid|onsite|on-site|w2|c2c)\b", " ", t)
+    t = re.sub(r"\(.*?\)", " ", t)      # drop "(Remote)" etc.
     t = re.sub(r"\b(job\s*(#|id|no\.?|number)?\s*:?\s*|req\s*#?\s*|r)\d{4,}\b", " ", t)   # "Job# 3055896", "R12345"
     words = re.sub(r"[^a-z0-9+# ]+", " ", t).split()
     return " ".join(TITLE_SWAPS.get(w, w) for w in words)
@@ -418,7 +460,76 @@ def _saved_without_jd(pid, company, title, url, new_jd=None):
     return None
 
 
-def check_duplicate(pid, company, title, url):
+NORM_VERSION = "3"       # raise when norm_company / norm_title / jd_signature change: saved jobs are re-cleaned
+SIG_SIZE = 64            # how many pieces of the JD are kept in its fingerprint
+SAME_JD = 0.75           # this much of two JDs the same -> the same job (posted again, or by an agency)
+
+
+def jd_signature(jd):
+    """A short fingerprint of a JD: the 64 smallest hashes of its 6-word pieces (MinHash-style).
+    Two postings of the same job (other link, title or agency) have nearly the same fingerprint."""
+    import hashlib
+    words = re.findall(r"[a-z0-9+#]+", re.sub(r"<[^>]+>", " ", (jd or "").lower()))
+    if len(words) < 60:                                      # too short to compare reliably
+        return None
+    shingles = {" ".join(words[i:i + 6]) for i in range(len(words) - 5)}
+    hashes = sorted(int(hashlib.md5(s.encode()).hexdigest()[:12], 16) for s in shingles)[:SIG_SIZE]
+    return " ".join(format(h, "x") for h in hashes)
+
+
+def jd_similarity(sig_a, sig_b):
+    """0..1: how much of two JDs is the same (estimated from their fingerprints)."""
+    if not sig_a or not sig_b:
+        return 0.0
+    a, b = set(sig_a.split()), set(sig_b.split())
+    union = sorted(a | b, key=lambda h: int(h, 16))[:SIG_SIZE]
+    return sum(1 for h in union if h in a and h in b) / max(1, len(union))
+
+
+COOLDOWN_DAYS = 30       # strict mode: no second application to the same company within this many days
+
+
+def strict_mode():
+    return setting("strict_dupes", "1") == "1"
+
+
+def cooldown_days():
+    try:
+        return int(float(setting("company_cooldown", str(COOLDOWN_DAYS)) or 0))
+    except ValueError:
+        return COOLDOWN_DAYS
+
+
+def applied_conflict(pid, company, title, jd="", exclude_id=None):
+    """The earlier APPLICATION of this candidate that a new application would duplicate, as (row, reason), or None.
+    Strict rules (companies block candidates for these):
+      1. same company (name variants count as one) and the same or a similar role title, at any time
+      2. the same job description at any company (agencies re-post their clients' jobs), at any time
+      3. any role at the same company within the cooldown days (default 30)"""
+    cn, tn, sig = norm_company(company), norm_title(title), jd_signature(jd)
+    with connect() as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM jobs WHERE profile_id=? AND status='applied' AND id IS NOT ?",
+                                             (pid, exclude_id))]
+    for r in rows:
+        if r["company_norm"] == cn and titles_similar(r["title_norm"], tn):
+            return r, f"Already applied {_date(r['applied_at'])} to {r['company']} · {r['title']}"
+    if sig:
+        for r in rows:
+            if r.get("jd_sig") and jd_similarity(sig, r["jd_sig"]) >= SAME_JD:
+                return r, (f"Same job description already applied {_date(r['applied_at'])}: {r['company']} · {r['title']} "
+                           "(re-posted by another company or agency)")
+    days = cooldown_days()
+    if strict_mode() and days:
+        cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+        for r in rows:
+            if r["company_norm"] == cn and _date(r["applied_at"]) >= cut:
+                left = days - (datetime.now() - datetime.strptime(_date(r["applied_at"]), "%Y-%m-%d")).days
+                return r, (f"Applied to {r['company']} on {_date(r['applied_at'])} ({r['title']}): wait {max(left, 1)} "
+                           f"more day(s) before another application there")
+    return None
+
+
+def check_duplicate(pid, company, title, url, jd=""):
     """Returns (level, message).
     level: 'new' | 'warning' (save, but be careful) | 'blocked' (do not save)."""
     old = _saved_without_jd(pid, company, title, url)
@@ -433,6 +544,9 @@ def check_duplicate(pid, company, title, url):
                 return "blocked", f"Already applied {_date(row['applied_at'])} ({row['source']})"
             return "blocked", f"Already saved {_date(row['saved_at'])} ({row['source']})"
         same_company = con.execute("SELECT * FROM jobs WHERE profile_id=? AND company_norm=?", (pid, cn)).fetchall()
+    hit = applied_conflict(pid, company, title, jd)            # an earlier application this one would duplicate
+    if hit:
+        return "blocked", "⛔ " + hit[1]
 
     # same job posted on another board
     for r in same_company:
@@ -440,6 +554,22 @@ def check_duplicate(pid, company, title, url):
             if r["status"] == "applied":
                 return "blocked", f"Already applied {_date(r['applied_at'])} ({r['source']})"
             return "blocked", f"Same job already saved from {r['source']}"
+
+    # the same JD posted again: another link, title or company name (agencies re-post jobs of their clients)
+    sig = jd_signature(jd)
+    if sig:
+        since = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
+        with connect() as con:
+            rows = con.execute("SELECT * FROM jobs WHERE profile_id=? AND jd_sig IS NOT NULL AND saved_at >= ?",
+                               (pid, since)).fetchall()
+        best = max(rows, key=lambda r: jd_similarity(sig, r["jd_sig"]), default=None)
+        if best is not None and jd_similarity(sig, best["jd_sig"]) >= SAME_JD:
+            where = f"{best['company']} · {best['title']}"
+            if best["status"] == "applied":
+                return "blocked", f"Same job description already applied {_date(best['applied_at'])}: {where}"
+            if best["company_norm"] == cn or titles_similar(best["title_norm"], tn) or strict_mode():
+                return "blocked", f"Same job description already saved: {where} ({best['source']}). Apply only once."
+            return "warning", f"Same job description as {where} (saved {_date(best['saved_at'])}): probably a re-post"
 
     # similar role at the same company, applied recently
     cutoff = (datetime.now() - timedelta(days=SIMILAR_DAYS)).strftime("%Y-%m-%d")
@@ -510,11 +640,11 @@ def save_job(pid, company, title, apply_url, jd, location="", source="", posted_
             return {"level": "blocked", "message": "Already saved (still no JD)", "id": None}
         m = match_for(pid, jd, title)
         with connect() as con:
-            con.execute("UPDATE jobs SET jd=?, match=?, missing=?, location=COALESCE(NULLIF(location,''),?) WHERE id=?",
-                        (jd, m["match"] or 0, json.dumps(m["missing"]), location, old["id"]))
+            con.execute("UPDATE jobs SET jd=?, match=?, missing=?, location=COALESCE(NULLIF(location,''),?), jd_sig=? "
+                        "WHERE id=?", (jd, m["match"] or 0, json.dumps(m["missing"]), location, jd_signature(jd), old["id"]))
         return {"level": "warning", "message": "JD added to the job you saved earlier", "id": old["id"], "match": m["match"]}
 
-    level, message = check_duplicate(pid, company, title, apply_url)
+    level, message = check_duplicate(pid, company, title, apply_url, jd)
     if level == "blocked":
         with connect() as con:
             con.execute("INSERT INTO removed(profile_id,company,title,source,apply_url,reason,found_at) VALUES(?,?,?,?,?,?,?)",
@@ -524,12 +654,12 @@ def save_job(pid, company, title, apply_url, jd, location="", source="", posted_
     m = match_for(pid, jd, title)
     with connect() as con:
         cur = con.execute("""INSERT INTO jobs(profile_id,company,title,location,source,apply_url,jd,job_key,
-                             company_norm,title_norm,status,warning,match,missing,saved_at,posted_at,origin)
-                             VALUES(?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)""",
+                             company_norm,title_norm,status,warning,match,missing,saved_at,posted_at,origin,jd_sig)
+                             VALUES(?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?)""",
                           (pid, company, title, location, source, apply_url, jd, job_key(apply_url, company),
                            norm_company(company), norm_title(title),
                            message if level == "warning" else None,
-                           m["match"] or 0, json.dumps(m["missing"]), now(), posted_at, origin))
+                           m["match"] or 0, json.dumps(m["missing"]), now(), posted_at, origin, jd_signature(jd)))
     return {"level": level, "message": message if level == "warning" else "Saved", "id": cur.lastrowid,
             "match": m["match"]}
 
@@ -644,7 +774,50 @@ def delete_jobs(job_ids, remember=True):
         if remember:
             con.executemany("INSERT OR IGNORE INTO dismissed SELECT profile_id, job_key, ? FROM jobs "
                             "WHERE id=? AND status!='applied'", [(now(), i) for i in job_ids])
+            for i in job_ids:                                  # recycle bin: can be restored for 30 days
+                r = con.execute("SELECT * FROM jobs WHERE id=? AND status!='applied'", (i,)).fetchone()
+                if r:
+                    con.execute("INSERT INTO trash (profile_id, job_id, company, title, data, deleted_at) "
+                                "VALUES (?,?,?,?,?,?)", (r["profile_id"], r["id"], r["company"], r["title"],
+                                                         json.dumps(dict(r)), now()))
+            con.execute("DELETE FROM trash WHERE deleted_at < ?", ((datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d"),))
         con.executemany("DELETE FROM jobs WHERE id=? AND status!='applied'", [(i,) for i in job_ids])
+
+
+def trash_list(pid):
+    """Jobs deleted in the last 30 days (newest first)."""
+    with connect() as con:
+        return [dict(r) for r in con.execute("SELECT id, company, title, deleted_at FROM trash WHERE profile_id=? "
+                                             "ORDER BY deleted_at DESC, id DESC", (pid,))]
+
+
+def restore_jobs(trash_ids):
+    """Put deleted jobs back in Jobs waiting (same data, match and JD), and let Collect find them again."""
+    n = 0
+    with connect() as con:
+        cols = _columns(con, "jobs")
+        for tid in trash_ids:
+            r = con.execute("SELECT * FROM trash WHERE id=?", (tid,)).fetchone()
+            if not r:
+                continue
+            job = {k: v for k, v in json.loads(r["data"]).items() if k in cols}
+            if con.execute("SELECT 1 FROM jobs WHERE id=?", (job.get("id"),)).fetchone():
+                job.pop("id", None)                            # that id was reused: give it a new one
+            keys = list(job)
+            con.execute(f"INSERT INTO jobs ({', '.join(keys)}) VALUES ({', '.join('?' * len(keys))})",
+                        [job[k] for k in keys])
+            con.execute("DELETE FROM dismissed WHERE profile_id=? AND job_key=?", (job.get("profile_id"), job.get("job_key")))
+            con.execute("DELETE FROM trash WHERE id=?", (tid,))
+            n += 1
+    return n
+
+
+def forget_deleted(pid):
+    """Let Collect find again every job deleted for this profile (also ones deleted before the recycle bin existed)."""
+    with connect() as con:
+        n = con.execute("SELECT COUNT(*) FROM dismissed WHERE profile_id=?", (pid,)).fetchone()[0]
+        con.execute("DELETE FROM dismissed WHERE profile_id=?", (pid,))
+    return n
 
 
 # ---------------------------------------------------------------- application form autofill (J button)
