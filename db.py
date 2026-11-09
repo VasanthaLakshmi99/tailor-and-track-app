@@ -486,7 +486,20 @@ def jd_similarity(sig_a, sig_b):
     return sum(1 for h in union if h in a and h in b) / max(1, len(union))
 
 
-COOLDOWN_DAYS = 30       # strict mode: no second application to the same company within this many days
+COOLDOWN_DAYS = 0        # optional: no second application to the same company within this many days (0 = off:
+                         # different roles at the same company are allowed)
+
+
+def same_role(title_a, title_b):
+    """True when two titles are the same role: same words once level words (Senior, Lead, II, Sr.) and extras like
+    '- Remote' are removed. 'DevOps Engineer' = 'Sr. DevOps Engineer II'; 'DevOps Engineer' != 'DevSecOps Engineer'."""
+    a = matching._title_words(norm_title(title_a))
+    b = matching._title_words(norm_title(title_b))
+    if not a or not b:
+        return False
+    if set(a) == set(b):
+        return True
+    return difflib.SequenceMatcher(None, " ".join(a), " ".join(b)).ratio() >= 0.95
 
 
 def strict_mode():
@@ -503,15 +516,16 @@ def cooldown_days():
 def applied_conflict(pid, company, title, jd="", exclude_id=None):
     """The earlier APPLICATION of this candidate that a new application would duplicate, as (row, reason), or None.
     Strict rules (companies block candidates for these):
-      1. same company (name variants count as one) and the same or a similar role title, at any time
+      1. same company (name variants count as one) and the same role (level words ignored), at any time
       2. the same job description at any company (agencies re-post their clients' jobs), at any time
-      3. any role at the same company within the cooldown days (default 30)"""
+      3. optional: any role at the same company within the cooldown days (default 0 = off)
+    A different role at the same company is allowed."""
     cn, tn, sig = norm_company(company), norm_title(title), jd_signature(jd)
     with connect() as con:
         rows = [dict(r) for r in con.execute("SELECT * FROM jobs WHERE profile_id=? AND status='applied' AND id IS NOT ?",
                                              (pid, exclude_id))]
     for r in rows:
-        if r["company_norm"] == cn and titles_similar(r["title_norm"], tn):
+        if r["company_norm"] == cn and same_role(r["title"], title):
             return r, f"Already applied {_date(r['applied_at'])} to {r['company']} · {r['title']}"
     if sig:
         for r in rows:
