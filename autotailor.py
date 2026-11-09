@@ -478,6 +478,81 @@ MAX_PAGES = 2.0        # and not more than two
 LAYOUTS = [(10.3, 12.6, 0), (10.6, 13.4, 2), (10.9, 14.2, 3), (11.2, 15.0, 4), (11.5, 15.8, 5)]   # (font size, line height, extra gap)
 
 
+_LINK_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+|(?<![@\w])(?:[a-z0-9-]+\.)?(?:linkedin\.com|github\.com|"
+                       r"gitlab\.com|behance\.net|medium\.com|kaggle\.com)/[^\s<>\"')]+", re.I)
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_PHONE = re.compile(r"\+?\d[\d\s().-]{8,}\d")
+
+
+def _href(u):
+    u = u.rstrip(".,;")
+    return u if u.lower().startswith(("http", "mailto:", "tel:")) else "https://" + u
+
+
+def link_for(part, links, anchors=None):
+    """The web address a piece of the contact line should open: the link that was behind these exact words in
+    the master resume, a URL, an e-mail, a phone, or a word like 'LinkedIn' / 'GitHub' / 'Portfolio'."""
+    s = part.strip()
+    low = " ".join(s.lower().split()).strip(" |•·—–-")
+    for label, uri in (anchors or {}).items():                 # exactly the words the link was on
+        if low == label or (len(label) > 3 and label in low and len(low) < len(label) + 12):
+            return _href(uri)
+    low = s.lower()
+    m = _LINK_URL.search(s)
+    if m:
+        return _href(m.group(0))
+    m = _EMAIL.search(s)
+    if m:
+        return "mailto:" + m.group(0).rstrip(".")
+    for word, host in (("linkedin", "linkedin.com"), ("github", "github.com"), ("gitlab", "gitlab.com"),
+                       ("kaggle", "kaggle.com"), ("medium", "medium.com"), ("behance", "behance.net")):
+        if word in low:
+            return next((u for u in links if host in u.lower()), None)
+    if re.search(r"portfolio|website|blog|personal site", low):
+        return next((u for u in links if u.startswith("http") and not re.search(
+            r"linkedin|github|gitlab|kaggle|medium|behance", u, re.I)), None)
+    if _PHONE.fullmatch(s.strip(" ()")) or (_PHONE.search(s) and len(re.sub(r"\D", "", s)) >= 10 and len(s) < 25):
+        return "tel:" + re.sub(r"[^\d+]", "", s)
+    return None
+
+
+def linked_contact(pdf, fix, contact, links, w, h, anchors=None):
+    """The contact line, centred, with every part clickable (e-mail, phone, LinkedIn, GitHub, website)."""
+    parts = [p for p in re.split(r"(\s*[•|·]\s*|\s{2,}|\s+[–—-]\s+)", contact) if p]
+    sizes = [pdf.get_string_width(fix(p)) for p in parts]
+    rows, row, width = [], [], 0.0                           # wrap onto more lines if needed, at separators
+    for p, s in zip(parts, sizes):
+        if row and width + s > w and not p.strip(" •|·-–—"):
+            rows.append(row)
+            row, width = [], 0.0
+            continue
+        row.append((p, s))
+        width += s
+    if row:
+        rows.append(row)
+    for row in rows:
+        while row and not row[-1][0].strip(" •|·-–—"):
+            row.pop()
+        total = sum(s for _, s in row)
+        pdf.set_x(pdf.l_margin + max(0, (w - total) / 2))
+        for p, s in row:
+            url = link_for(p, links, anchors) if p.strip(" •|·-–—") else None
+            if url:
+                pdf.set_text_color(31, 69, 201)
+            pdf.cell(s, h, fix(p), link=url or "")
+            if url:
+                pdf.set_text_color(0, 0, 0)
+        pdf.ln(h)
+
+
+def with_links(text):
+    """A bullet with web addresses in it -> markdown links, so they are clickable in the PDF."""
+    if not _LINK_URL.search(text):
+        return text, False
+    safe = text.replace("**", "*").replace("__", "_").replace("--", "–")
+    return _LINK_URL.sub(lambda m: f"[{m.group(0).rstrip('.,;')}]({_href(m.group(0))})", safe), True
+
+
 def to_pdf(r, min_pages=MIN_PAGES):
     """The resume as PDF. If it fills less than min_pages, the text and spacing are made a little bigger (normal resume
     sizes only, 10-11.5 pt) until it does. to_pdf.pages = how many pages the result fills (e.g. 1.6)."""
@@ -556,13 +631,14 @@ def _render(r, SIZE=10.3, LH=12.6, GAP=0):
     # name and contact, centred (like the master)
     if r.get("name"):
         pdf.set_font(font, "B", 13)
-        pdf.cell(w, 16, fix(r["name"]), align="C", new_x="LMARGIN", new_y="NEXT")
+        name_url = (r.get("anchors") or {}).get(" ".join(r["name"].lower().split()))
+        pdf.cell(w, 16, fix(r["name"]), align="C", new_x="LMARGIN", new_y="NEXT", link=_href(name_url) if name_url else "")
     if r.get("headline"):                                     # the master's own headline line, unchanged
         pdf.set_font(font, "", 10.8)
         pdf.multi_cell(w, 13, fix(r["headline"]), align="C", new_x="LMARGIN", new_y="NEXT")
     if r.get("contact"):
         pdf.set_font(font, "", 10.8)
-        pdf.multi_cell(w, 13, fix(r["contact"]), align="C", new_x="LMARGIN", new_y="NEXT")
+        linked_contact(pdf, fix, r["contact"], r.get("links") or [], w, 13, r.get("anchors"))
 
     def summary():
         if r["summary"]:
@@ -581,7 +657,8 @@ def _render(r, SIZE=10.3, LH=12.6, GAP=0):
                 for b in jb["bullets"]:
                     pdf.set_x(pdf.l_margin + 6)
                     pdf.cell(12, LH, fix("•") if font == "Body" else "-")
-                    pdf.multi_cell(w - 18, LH, fix(b), align="L", new_x="LMARGIN", new_y="NEXT")
+                    text, md = with_links(fix(b))
+                    pdf.multi_cell(w - 18, LH, text, align="L", new_x="LMARGIN", new_y="NEXT", markdown=md)
                 pdf.ln(GAP)
 
     def skills():

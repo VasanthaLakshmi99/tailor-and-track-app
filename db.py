@@ -261,6 +261,99 @@ def save_resume(pid, filename, data):
     return text
 
 
+_URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+|(?<![@\w])(?:[a-z0-9-]+\.)?(?:linkedin\.com|github\.com|gitlab\.com|"
+                  r"behance\.net|medium\.com|kaggle\.com)/[^\s<>\"')]+", re.I)
+
+
+def resume_links(p):
+    """Every link in the master resume, also the ones hidden behind words like 'LinkedIn' (PDF link boxes,
+    Word hyperlinks), so the tailored resume keeps them clickable."""
+    if not p:
+        return []
+    links = []
+    data, name = p.get("data"), (p.get("filename") or "").lower()
+    if data is None and p.get("id"):                          # profile() leaves the file out: read it here
+        with connect() as con:
+            row = con.execute("SELECT data FROM profiles WHERE id=?", (p["id"],)).fetchone()
+            data = row["data"] if row else None
+    try:
+        if data and name.endswith(".pdf"):
+            from pypdf import PdfReader
+            for page in PdfReader(io.BytesIO(data)).pages:
+                for a in page.get("/Annots") or []:
+                    act = a.get_object().get("/A") or {}
+                    if act.get("/URI"):
+                        links.append(str(act["/URI"]))
+        elif data and name.endswith(".docx"):
+            import docx
+            doc = docx.Document(io.BytesIO(data))
+            links += [rel.target_ref for rel in doc.part.rels.values() if "hyperlink" in rel.reltype]
+            for sec in doc.sections:
+                links += [rel.target_ref for rel in sec.header.part.rels.values() if "hyperlink" in rel.reltype]
+    except Exception:
+        pass
+    links += [m.group(0).rstrip(".,;") for m in _URL.finditer(p.get("text") or "")]
+    out = []
+    for u in links:
+        u = u.strip()
+        if u and not u.lower().startswith(("mailto:", "tel:", "http")):
+            u = "https://" + u
+        if u and u not in out:
+            out.append(u)
+    return out
+
+
+def resume_anchors(p):
+    """{word(s) in the resume: the link behind them}, e.g. {'linkedin': 'https://linkedin.com/in/…',
+    'my portfolio': 'https://…'}: which word each hidden link sits on, in PDF and Word master resumes."""
+    if not p:
+        return {}
+    data, name = p.get("data"), (p.get("filename") or "").lower()
+    if data is None and p.get("id"):
+        with connect() as con:
+            row = con.execute("SELECT data FROM profiles WHERE id=?", (p["id"],)).fetchone()
+            data = row["data"] if row else None
+    out = {}
+    try:
+        if data and name.endswith(".pdf"):
+            from pypdf import PdfReader
+            for page in PdfReader(io.BytesIO(data)).pages:
+                boxes = []
+                for a in page.get("/Annots") or []:
+                    o = a.get_object()
+                    uri = (o.get("/A") or {}).get("/URI")
+                    if uri and o.get("/Rect"):
+                        x1, y1, x2, y2 = [float(v) for v in o["/Rect"]]
+                        boxes.append((min(x1, x2) - 2, min(y1, y2) - 2, max(x1, x2) + 2, max(y1, y2) + 2, str(uri), []))
+                if not boxes:
+                    continue
+
+                def grab(text, cm, tm, font, size):
+                    x, y = tm[4] * cm[0] + cm[4], tm[5] * cm[3] + cm[5]
+                    for b in boxes:
+                        if b[0] <= x + 1 and x < b[2] and b[1] <= y <= b[3]:
+                            b[5].append(text)
+                page.extract_text(visitor_text=grab)
+                for *_, uri, parts in boxes:
+                    label = " ".join("".join(parts).split()).strip(" |•·—–-")
+                    if 1 < len(label) < 80:
+                        out.setdefault(label.lower(), uri)
+        elif data and name.endswith(".docx"):
+            import docx
+            doc = docx.Document(io.BytesIO(data))
+            paras = list(doc.paragraphs) + [p_ for t in doc.tables for row in t.rows for c in row.cells for p_ in c.paragraphs]
+            for sec in doc.sections:
+                paras += list(sec.header.paragraphs) + list(sec.footer.paragraphs)
+            for para in paras:
+                for h in para.hyperlinks:
+                    label = " ".join((h.text or "").split()).strip(" |•·—–-")
+                    if label and h.address:
+                        out.setdefault(label.lower(), h.address)
+    except Exception:
+        pass
+    return out
+
+
 def resume_text(pid):
     p = profile(pid)
     return (p or {}).get("text") or ""

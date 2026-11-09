@@ -194,6 +194,8 @@ def save_ai_answer(job, answer_text, master_text):
     r["titles"] = {**r.get("titles", {}), **m.get("titles", {})}          # the master's own heading words
     if set(r.get("order") or []) <= set(m.get("order") or []):
         r["order"] = [k for k in m["order"] if k in set(r["order"])]        # and the master's section order
+    prof = db.profile(job.get("profile_id")) or db.profile(db.active_profile_id())
+    r["links"], r["anchors"] = db.resume_links(prof), db.resume_anchors(prof)
     data = autotailor.to_pdf(r)
     if autotailor.to_pdf.pages < autotailor.MIN_PAGES:
         issues.append(f"Only {autotailor.to_pdf.pages} pages: ask the AI \"Make it longer: at least 1.5 pages, more "
@@ -235,7 +237,10 @@ def auto_tailor(job, ticked=(), remember=True):
         raise ValueError("Upload the master resume first")
     if not (job.get("jd") or "").strip():
         raise ValueError("This job has no JD yet. Open it and click the J button first")
-    data = autotailor.to_pdf(autotailor.tailor(job, resume, confirmed, roles=db.roles_for_search(profile)))
+    r = autotailor.tailor(job, resume, confirmed, roles=db.roles_for_search(profile))
+    r["links"] = db.resume_links(profile)                     # LinkedIn / GitHub / e-mail stay clickable
+    r["anchors"] = db.resume_anchors(profile)
+    data = autotailor.to_pdf(r)
     return save_tailored(job, "auto.pdf", data)
 
 
