@@ -1422,8 +1422,12 @@ def apply_page():
     for jid, name, why in st.session_state.get("apply_blocked", []):
         st.error(f"⛔ **Not marked as applied: {name}.** {why}. Applying again can get the candidate (and you) "
                  "blocked by the company.")
-        if st.button(f"I checked it, mark {name} as applied anyway", key=f"force_btn_{jid}"):
+        b1, b2 = st.columns([3, 1])
+        if b1.button(f"I checked it, mark {name} as applied anyway", key=f"force_btn_{jid}"):
             db.mark_applied(jid, True)
+            st.session_state["apply_blocked"] = [x for x in st.session_state["apply_blocked"] if x[0] != jid]
+            st.rerun()
+        if b2.button("Dismiss", key=f"dismiss_btn_{jid}", width="stretch"):
             st.session_state["apply_blocked"] = [x for x in st.session_state["apply_blocked"] if x[0] != jid]
             st.rerun()
     if "apply_msg" in st.session_state:
