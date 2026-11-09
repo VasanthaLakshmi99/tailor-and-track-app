@@ -473,7 +473,31 @@ _FONT_PATHS = [  # Calibri (same as most master resumes), then Arial, then Linux
 _PLAIN = str.maketrans({"–": "-", "—": "-", "•": "-", "’": "'", "‘": "'", "“": '"', "”": '"', "·": "|", "…": "..."})
 
 
-def to_pdf(r):
+MIN_PAGES = 1.5        # a tailored resume should fill at least one and a half pages
+MAX_PAGES = 2.0        # and not more than two
+LAYOUTS = [(10.3, 12.6, 0), (10.6, 13.4, 2), (10.9, 14.2, 3), (11.2, 15.0, 4), (11.5, 15.8, 5)]   # (font size, line height, extra gap)
+
+
+def to_pdf(r, min_pages=MIN_PAGES):
+    """The resume as PDF. If it fills less than min_pages, the text and spacing are made a little bigger (normal resume
+    sizes only, 10-11.5 pt) until it does. to_pdf.pages = how many pages the result fills (e.g. 1.6)."""
+    tried = []
+    for size, lh, gap in LAYOUTS:
+        data, pages = _render(r, size, lh, gap)
+        tried.append((pages, data))
+        if min_pages <= pages <= MAX_PAGES:
+            break
+    fits = [t for t in tried if t[0] <= MAX_PAGES] or tried[:1]
+    good = [t for t in fits if t[0] >= min_pages]
+    pages, data = good[0] if good else max(fits, key=lambda t: t[0])    # 1.5-2 pages, else the longest up to 2
+    to_pdf.pages = round(pages, 1)
+    return data
+
+
+to_pdf.pages = 0
+
+
+def _render(r, SIZE=10.3, LH=12.6, GAP=0):
     try:
         from fpdf import FPDF
     except ImportError:                                       # install the free PDF package once, automatically
@@ -499,10 +523,9 @@ def to_pdf(r):
             break
     pdf.add_page()
     w = pdf.w - pdf.l_margin - pdf.r_margin
-    LH, SIZE = 12.6, 10.3
 
     def heading(key, default):
-        pdf.ln(1)
+        pdf.ln(1 + GAP)
         pdf.set_font(font, "B", 10.8)
         pdf.cell(w, 13, fix(r.get("titles", {}).get(key) or default), new_x="LMARGIN", new_y="NEXT")
         y = pdf.get_y()
@@ -559,6 +582,7 @@ def to_pdf(r):
                     pdf.set_x(pdf.l_margin + 6)
                     pdf.cell(12, LH, fix("•") if font == "Body" else "-")
                     pdf.multi_cell(w - 18, LH, fix(b), align="L", new_x="LMARGIN", new_y="NEXT")
+                pdf.ln(GAP)
 
     def skills():
         if r["skills"]:
@@ -586,4 +610,6 @@ def to_pdf(r):
     order += [k for k in ("summary", "experience", "skills", "projects", "education", "certifications") if k not in order]
     for k in order:
         parts[k]()
-    return bytes(pdf.output())
+    usable = pdf.h - pdf.t_margin - pdf.b_margin
+    pages = (pdf.page - 1) + min(1.0, (pdf.get_y() - pdf.t_margin) / usable)
+    return bytes(pdf.output()), pages
