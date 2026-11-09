@@ -87,12 +87,58 @@ def excel(pid, period, applied_only=True):
             ws.row_dimensions[row[0].row].height = 60
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
+        _jd_sheet(xw.book, ws, data)
         summary = xw.book.create_sheet("Summary")
         summary.append(["Candidate", data[0]["Candidate"] if data else ""])
         summary.append(["Period", period_name(period)])
         summary.append(["Applications", sum(1 for r in data if r["Status"] == "Applied")])
         summary.append(["Created", db.now()])
     return buf.getvalue(), len(data)
+
+
+def _jd_chunks(text, size=900):
+    """A JD as readable rows: its own lines, and long lines cut at sentence ends (Excel shows ~1,000 characters per cell)."""
+    out = []
+    for line in (text or "").replace("\r", "").split("\n"):
+        line = line.strip()
+        while len(line) > size:
+            cut = max(line.rfind(". ", 0, size), line.rfind("; ", 0, size), line.rfind(" ", 0, size))
+            cut = cut + 1 if cut > size // 2 else size
+            out.append(line[:cut].strip())
+            line = line[cut:].strip()
+        if line:
+            out.append(line)
+    return out
+
+
+def _jd_sheet(book, apps, data):
+    """'Job descriptions' sheet: every job's full JD, one readable row per paragraph, linked from Applications."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    js = book.create_sheet("Job descriptions")
+    js.column_dimensions["A"].width = 130
+    jd_col = COLUMNS.index("JD") + 1
+    row = 1
+    for i, d in enumerate(data, start=2):
+        head = js.cell(row=row, column=1, value=f"{d['Company Name']} · {d['Role Title']}")
+        head.font = Font(bold=True, color="FFFFFF")
+        head.fill = PatternFill("solid", fgColor="2F5BEA")
+        top = row
+        row += 1
+        if d.get("Apply Link"):
+            c = js.cell(row=row, column=1, value=d["Apply Link"])
+            c.hyperlink, c.font = d["Apply Link"], Font(color="2448C8", underline="single")
+            row += 1
+        parts = _jd_chunks(d.get("JD") or "") or ["(no job description saved: open the job and click J to save it)"]
+        for part in parts:
+            c = js.cell(row=row, column=1, value=part)
+            c.alignment = Alignment(wrap_text=True, vertical="top")
+            row += 1
+        row += 1                                              # empty row between jobs
+        cell = apps.cell(row=i, column=jd_col)                # Applications: click the JD to read it in full
+        from openpyxl.worksheet.hyperlink import Hyperlink
+        cell.hyperlink = Hyperlink(ref=cell.coordinate, location=f"'Job descriptions'!A{top}", display="Full JD")
+        cell.font = Font(color="2448C8")
+    js.freeze_panes = "A1"
 
 
 def resumes_zip(pid, period):
