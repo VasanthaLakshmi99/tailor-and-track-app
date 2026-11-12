@@ -1105,6 +1105,7 @@ def fetch_jooble(search_terms, location="United States"):
     return out
 
 
+
 def fetch_jsearch(search_terms, country="us", where="USA"):
     """JSearch on RapidAPI (free plan: 200 searches/month). Reads Google for Jobs, so it includes
     LinkedIn, Indeed, ZipRecruiter, Dice and company sites, with the full JD."""

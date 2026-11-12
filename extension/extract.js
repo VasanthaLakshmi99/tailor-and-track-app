@@ -8,7 +8,7 @@
 //      iCIMS, Taleo, Jobvite, BambooHR ...
 //   3. any other site: the "Job description" heading, the biggest job-like text block,
 //      the page title, the company name in the web address
-(() => {
+(async () => {
   // hide Tailor&Track's own badges while reading, so "J · Saved" is never taken as company or title
   const badges = [...document.querySelectorAll(".jobpilot-badge")];
   badges.forEach((b) => { b.dataset.jpText = b.textContent; b.textContent = ""; });
@@ -264,6 +264,109 @@
   // ---------------------------------------------------------------- start reading
   const out = { company: "", title: "", location: "", jd: "", source: sourceName(), url: location.href };
   const fill = (key, value) => { if (!out[key] && value) out[key] = clean(value); };
+
+  // ZR-BEGIN ZipRecruiter (2026 layout): the job is stored inside the page as data, not in fixed boxes
+  const zrFlight = (html) => {                       // the text inside self.__next_f.push([1,"..."]) blocks
+    const re = /self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)/g;
+    let data = "", m;
+    while ((m = re.exec(html))) { try { data += JSON.parse(m[1]); } catch (e) { /* skip */ } }
+    return data;
+  };
+  const zrTexts = (data) => {                        // long texts are stored apart: "29:T<hex bytes>,<text>"
+    const bytes = new TextEncoder().encode(data), dec = new TextDecoder(), texts = {};
+    let pos = 0;
+    while (pos < bytes.length) {
+      const head = dec.decode(bytes.subarray(pos, Math.min(pos + 40, bytes.length))).match(/^([0-9a-f]*):(?:T([0-9a-f]+),)?/);
+      if (!head) break;
+      if (head[2]) {
+        const start = pos + head[0].length, len = parseInt(head[2], 16);
+        texts["$" + head[1]] = dec.decode(bytes.subarray(start, start + len));
+        pos = start + len;
+      } else {
+        const nl = bytes.indexOf(10, pos);
+        pos = nl < 0 ? bytes.length : nl + 1;
+      }
+    }
+    return texts;
+  };
+  const zrJsonAt = (s, i) => {                       // the JSON object / list that starts at s[i]
+    let depth = 0, inStr = false;
+    for (let j = i; j < s.length; j++) {
+      const c = s[j];
+      if (inStr) { if (c === "\\") j++; else if (c === '"') inStr = false; continue; }
+      if (c === '"') inStr = true;
+      else if (c === "{" || c === "[") depth++;
+      else if (c === "}" || c === "]") { if (--depth === 0) { try { return JSON.parse(s.slice(i, j + 1)); } catch (e) { return null; } } }
+    }
+    return null;
+  };
+  const zrValues = (data, key) => {                  // every value of "key": in the data
+    const out = [];
+    let i = data.indexOf(`"${key}":`);
+    while (i >= 0) {
+      const v = zrJsonAt(data, i + key.length + 3);
+      if (v) out.push(v);
+      i = data.indexOf(`"${key}":`, i + 1);
+    }
+    return out;
+  };
+  const zrJob = (j, texts) => {                      // {title, company, location, jdHtml, url, lk, jid}
+    if (!j || typeof j !== "object") return null;
+    const t = (v) => (typeof v === "string" ? (v.startsWith("$$") ? v.slice(1) : (texts[v] !== undefined ? texts[v] : v)) : "");
+    const loc = j.location || {}, disp = j.display || {};
+    let place = t(disp.location) || [t(loc.city), t(loc.stateCode) || t(loc.state)].filter(Boolean).join(", ") || t(loc.displayName);
+    if (loc.countryCode && !/^(US|CA)$/.test(loc.countryCode) && place && !place.includes(t(loc.country))) place += ", " + t(loc.country);
+    if ((j.locationTypes || []).some((x) => /REMOTE/.test(String(x && x.name)) || (x && x.name === 3)) && !/remote/i.test(place))
+      place = place ? place + " (Remote)" : "Remote";
+    return { title: t(j.title), company: t((j.company || {}).name), location: place, jdHtml: t(j.htmlFullDescription),
+             url: t(j.rawCanonicalZipJobPageUrl), lk: t(j.listingKey), jid: t(j.openSeatId) };
+  };
+  const zrRead = (html) => {                         // {details: the job page's job, cards: jobs listed on a search page}
+    const data = zrFlight(html);
+    if (!data) return { details: null, cards: [] };
+    const texts = zrTexts(data);
+    const sd = zrValues(data, "serializedJobDetails").map((x) => zrJob(x.jobDetails, texts)).filter(Boolean);
+    let cards = [];
+    for (const c of zrValues(data, "jobCards").concat(zrValues(data, "jobKeysMap")))
+      cards = cards.concat((Array.isArray(c) ? c : Object.values(c)).map((x) => zrJob(x, texts)).filter(Boolean));
+    return { details: sd[0] || null, cards };
+  };
+  const zrHtmlText = (html) => {
+    try { return htmlToText(html); } catch (e) { return (html || "").replace(/<[^>]+>/g, " "); }
+  };
+  async function zipRecruiter() {
+    const q = new URLSearchParams(location.search);
+    const lk = q.get("lk") || "", jid = q.get("jid") || "";
+    const same = (j) => j && ((lk && j.lk === lk) || (jid && j.jid === jid));
+    const here = zrRead([...document.scripts].map((s) => s.textContent).join("\n"));
+    const abs = (u) => (u ? new URL(u, "https://www.ziprecruiter.com").href : "");
+    let job = here.details && (same(here.details) || (!lk && /\/c\/[^/]+\/job\//i.test(path))) ? here.details : null;
+    let url = job ? (abs(job.url) || location.href) : "";
+    if (!job) {
+      const card = here.cards.find(same);
+      const link = card ? abs(card.url)
+        : (jid && ([...document.querySelectorAll(`a[href*="jid=${jid}"]`)][0] || {}).href) || "";
+      if (card) job = card;
+      if (link) {
+        url = link;
+        try {   // open the job's own page in the background for the full description
+          const r = await fetch(link, { credentials: "include" });
+          const d = r.ok ? zrRead(await r.text()).details : null;
+          if (d && d.jdHtml && (!card || same(d) || d.title === card.title)) job = Object.assign({}, card || {}, d);
+        } catch (e) { /* keep the card */ }
+      }
+    }
+    if (!job) return false;
+    out.title = clean(job.title) || out.title;
+    out.company = clean(job.company) || out.company;
+    out.location = clean(job.location) || out.location;
+    if (job.jdHtml) out.jd = zrHtmlText(job.jdHtml);
+    if (url) out.url = url;
+    return !!(out.title && out.company);
+  }
+  // ZR-END
+  let zrDone = false;
+  if (host.includes("ziprecruiter.")) { try { zrDone = await zipRecruiter(); } catch (e) { /* fall back to reading the page */ } }
 
   // 1a. JSON-LD JobPosting (most job sites have it)
   const findPosting = (node) => {

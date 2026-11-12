@@ -940,6 +940,72 @@ def jobs_waiting_table():
             st.caption("No JD saved for this job yet. Open the job and click the J button, then Save.")
 
 
+_REQ_HEAD = re.compile(r"^(requirements?|qualifications?|what you('ll)? (need|bring)|about you|must have|you have|"
+                       r"skills|what we('re| are) looking for|minimum|preferred|nice to have|responsibilities|"
+                       r"what you('ll)? do|key responsibilities|the role|duties)\b", re.I)
+
+
+def interview_prep():
+    """Full JD of any job of this candidate (applied first), with what the employer wants, for interview preparation."""
+    with st.container(border=True):
+        st.subheader("📄 Full JD & interview prep")
+        q = st.text_input("Find the job", key=f"prep_q_{PID}", placeholder="🔍 Company or role, e.g. SpaceX")
+        data = [j for j in db.jobs(PID, search=q.strip()) if j["status"] != "hidden"]
+        data.sort(key=lambda j: j["applied_at"] or "", reverse=True)
+        data.sort(key=lambda j: j["status"] != "applied")
+        if not data:
+            st.caption("No job found. Check the spelling, or save the job with the J button first.")
+            return
+        names = {j["id"]: f"{j['company']} · {j['title']}" + (f" (applied {(j['applied_at'] or '')[:10]})"
+                                                             if j["status"] == "applied" else " (not applied)") for j in data}
+        pick = st.selectbox(f"Job ({len(data)} found, applied first)", list(names), format_func=names.get,
+                            key=f"prep_pick_{PID}_{q}")
+        job = next(j for j in data if j["id"] == pick)
+        jd = (job["jd"] or "").strip()
+        if not jd:
+            st.warning("No JD saved for this job. Open it and click the J button, then Save: the full JD is stored.")
+            if job["apply_url"]:
+                st.link_button("Open the job ↗", job["apply_url"])
+            return
+        resume = db.scoring_text(P)
+        rep = matching.ats_report(jd, resume, job["title"], job["company"])
+        hard = [k for k in matching.jd_keywords(jd, resume, job["company"]) if k[3] == "hard"]
+        have = [k[0] for k in hard if matching.has_keyword(resume, k[0], k[1])]
+        gaps = [k[0] for k in hard if k[0] not in have]
+        need = matching.jd_years(jd)
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Years asked", f"{need}+" if need is not None else "not stated")
+        m2.metric("Skills the resume shows", f"{len(have)} of {len(hard)}")
+        m3.metric("ATS (master resume)", rep["score"])
+        st.markdown("**Prepare examples for:** " + (", ".join(have[:15]) or "—"))
+        if gaps:
+            st.markdown("**They ask for, not on the resume (read up / be ready to discuss):** " + ", ".join(gaps[:15]))
+        # requirement and responsibility lines, as bullets to prepare answers for
+        lines, keep = [], False
+        for ln in (x.strip(" •-*\t") for x in jd.splitlines()):
+            if not ln:
+                continue
+            if _REQ_HEAD.match(ln) and len(ln) < 60:
+                keep = True
+                lines.append(f"**{ln}**")
+            elif keep and len(ln) > 15:
+                lines.append(f"- {ln}")
+        if lines:
+            with st.expander("What they want (requirements and duties from the JD)", expanded=True):
+                st.markdown("\n".join(lines[:60]))
+        st.markdown("**Full job description**")
+        st.code(jd, language=None, wrap_lines=True, height=420)
+        d1, d2, d3 = st.columns(3)
+        d1.download_button("⬇ JD as text file", jd, file_name=tailor.file_name(job, ".txt"), width="stretch",
+                           key=f"jd_dl_{job['id']}")
+        if job["apply_url"]:
+            d2.link_button("Open the job ↗", job["apply_url"], width="stretch")
+        if job["resume_file"] and Path(job["resume_file"]).exists():
+            p = Path(job["resume_file"])
+            d3.download_button("⬇ Resume sent", p.read_bytes(), file_name=p.name, mime="application/pdf",
+                               width="stretch", key=f"res_dl_{job['id']}")
+
+
 # ---------------------------------------------------------------- profiles page
 def profiles_page():
     st.title("Profiles")
@@ -1482,6 +1548,8 @@ def apply_page():
                                             (f"{n_off} moved back to not applied." if n_off else "")
             st.rerun()
 
+
+    interview_prep()
 
     # reports
     with st.container(border=True):

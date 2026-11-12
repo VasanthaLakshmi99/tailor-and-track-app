@@ -398,7 +398,12 @@ def tailor(job, resume_text, confirmed=(), roles=()):
     summary = (first + (" " + sentences[1] if len(sentences) > 1 else "")).strip()
     if summary and not summary.endswith((".", "!", "?")):
         summary += "."
-    top = [d for d, k, w in hard if not matching.has_keyword(summary, d, k)]
+    # ATS tools look for the job title in the resume. When it isn't there, name it as the role applied for
+    # (a goal, not a claimed past title; levels the resume can't back up are left out).
+    want = summary_title(job.get("title") or "", resume_text)
+    if want and want.lower() not in (summary + " " + resume_text).lower():
+        summary += f" Seeking {'an' if want[0].lower() in 'aeiou' else 'a'} {want} role."
+    top =[d for d, k, w in hard if not matching.has_keyword(summary, d, k)]
     top = [d for d in top if not any(d != o and d.lower() in o.lower() for o in top)][:6]   # "GitHub" in "GitHub Actions"
     if top:
         summary += f" Key skills for this role: {_join(top)}."

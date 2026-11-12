@@ -21,8 +21,17 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        try:
+            self.end_headers()
+            self.wfile.write(body)
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass   # the J box was closed before the answer arrived; the job is already saved
+
+    def handle(self):
+        try:
+            super().handle()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            pass
 
     def _allowed(self):
         # only our extension sends this header; normal websites cannot write here

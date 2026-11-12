@@ -648,7 +648,7 @@ def ats_report(jd, resume_text, job_title="", company=""):
     want_deg, has_deg = _degree(jd), _degree(resume_text)
     order = {"bachelor": 1, "master": 2, "phd": 3}
     edu_pct = 100 if not want_deg or (has_deg and order[has_deg] >= order[want_deg]) else 0
-    fmt = [bool(re.search(r"@", resume_text or "")), bool(re.search(r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}|\+\d{6,}", resume_text or "")),
+    fmt = [bool(re.search(r"@", resume_text or "")), bool(re.search(r"\(?\d{3}\)?[\s.-]\d{3}[\s.-]\d{4}|\+\s?\d[\d\s().-]{7,}\d|\b\d{5}\s?\d{5,6}\b", resume_text or "")),
            bool(re.search(r"^\s*(work |professional )?experience\b", resume_text or "", re.I | re.M)),
            bool(re.search(r"^\s*(technical |core )?skills\b", resume_text or "", re.I | re.M)),
            bool(re.search(r"^\s*education\b", resume_text or "", re.I | re.M))]
