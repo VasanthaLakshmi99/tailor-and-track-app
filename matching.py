@@ -94,6 +94,157 @@ SKILLS.update({
 })
 AMBIGUOUS |= {"excel", "routing", "switching", "lightning", "express", "bootstrap", "statistics", "soc"}
 
+# more technology skills (systems, languages, networking, data, AI, web, security)
+SKILLS.update({
+    'Linux Kernel': ['kernel development', 'kernel programming', 'linux kernel development'],
+    'Kernel Modules': ['kernel module'],
+    'eBPF': ['bpf'],
+    'Device Drivers': ['device driver', 'linux drivers'],
+    'Embedded Systems': ['embedded software', 'embedded development'],
+    'Firmware': [],
+    'RTOS': ['real-time operating system', 'freertos'],
+    'Assembly': ['assembly language', 'x86 assembly'],
+    'Operating Systems': ['os internals'],
+    'Memory Management': [],
+    'Multithreading': ['multi-threading', 'concurrency'],
+    'Systems Programming': ['low-level programming'],
+    'Compilers': ['compiler'],
+    'LLVM': [],
+    'CMake': [],
+    'Bazel': [],
+    'GDB': [],
+    'Valgrind': [],
+    'Virtual Machines': ['hypervisor', 'hypervisors', 'kvm', 'qemu'],
+    'Storage Systems': ['file systems', 'filesystems'],
+    'Verilog': [],
+    'VHDL': [],
+    'FPGA': [],
+    'Yocto': [],
+    'Perl': [],
+    'Groovy': [],
+    'Lua': [],
+    'Haskell': [],
+    'Elixir': [],
+    'Erlang': [],
+    'Dart': [],
+    'Objective-C': [],
+    'MATLAB': [],
+    'Solidity': [],
+    'C Programming': ['ansi c', 'c language', 'c/c++'],
+    'HTTP': ['https protocol', 'http/2'],
+    'CDN': ['content delivery network'],
+    'Cloudflare': [],
+    'Load Balancing': [],
+    'SD-WAN': ['sdwan'],
+    'Network Security': [],
+    'gRPC': [],
+    'Protocol Buffers': ['protobuf'],
+    'WebSockets': ['websocket'],
+    'AWS CDK': ['cdk'],
+    'Bicep': [],
+    'ARM Templates': ['arm template'],
+    'Azure Functions': [],
+    'Azure AD': ['entra id', 'azure active directory'],
+    'Cloud Run': [],
+    'Cloud Functions': [],
+    'Cosmos DB': ['cosmosdb'],
+    'Bigtable': [],
+    'Nomad': [],
+    'Crossplane': [],
+    'Karpenter': [],
+    'Kustomize': [],
+    'Argo Workflows': [],
+    'Backstage': [],
+    'Linkerd': [],
+    'Envoy': [],
+    'HAProxy': [],
+    'Cilium': [],
+    'Sentry': [],
+    'Loki': [],
+    'Jaeger': [],
+    'Honeycomb': [],
+    'Elastic Stack': ['elastic stack'],
+    'Sumo Logic': [],
+    'Flink': ['apache flink'],
+    'Apache Iceberg': ['iceberg'],
+    'Trino': ['presto'],
+    'Fivetran': [],
+    'DAX': [],
+    'Power Query': [],
+    'SSRS': [],
+    'Synapse': ['azure synapse'],
+    'Data Factory': ['azure data factory', 'adf'],
+    'ClickHouse': [],
+    'Neo4j': [],
+    'MariaDB': [],
+    'SQLite': [],
+    'Memcached': [],
+    'Pub/Sub': ['pubsub'],
+    'Data Governance': [],
+    'Data Quality': [],
+    'RAG': ['retrieval augmented generation', 'retrieval-augmented generation'],
+    'LangChain': [],
+    'LlamaIndex': [],
+    'Hugging Face': ['huggingface'],
+    'Prompt Engineering': [],
+    'Vector Databases': ['vector database', 'vector db'],
+    'Pinecone': [],
+    'SageMaker': ['amazon sagemaker'],
+    'Vertex AI': [],
+    'Kubeflow': [],
+    'MLflow': [],
+    'OpenAI API': ['openai'],
+    'Keras': [],
+    'XGBoost': [],
+    'Fine-tuning': ['fine tuning'],
+    'Tailwind CSS': ['tailwind'],
+    'Svelte': [],
+    'Webpack': [],
+    'Vite': [],
+    'Jest': [],
+    'Mocha': [],
+    'Storybook': [],
+    'SASS': ['scss'],
+    'jQuery': [],
+    'Laravel': [],
+    'Ruby on Rails': ['ruby on rails'],
+    'Blazor': [],
+    'SwiftUI': [],
+    'Jetpack Compose': [],
+    'Xcode': [],
+    'Android Studio': [],
+    'Firebase': [],
+    'Unity': ['unity3d'],
+    'WebAssembly': ['wasm'],
+    'OWASP': [],
+    'SAST': [],
+    'DAST': [],
+    'Burp Suite': [],
+    'Zero Trust': [],
+    'SSO': ['single sign-on', 'single sign on'],
+    'OAuth': ['oauth2', 'oauth 2.0'],
+    'SAML': [],
+    'Kerberos': [],
+    'PKI': [],
+    'TLS': ['ssl/tls', 'ssl'],
+    'Threat Modeling': ['threat modelling'],
+    'GDPR': [],
+    'HIPAA': [],
+    'PCI DSS': ['pci-dss', 'pci'],
+    'SOC 2': ['soc2'],
+    'Incident Response': [],
+    'Identity and Access Management': [],
+    'macOS': [],
+    'Active Directory': [],
+    'TDD': ['test-driven development', 'test driven development'],
+    'OOP': ['object-oriented programming', 'object oriented programming', 'object-oriented design'],
+    'Design Patterns': [],
+    'System Design': [],
+    'Data Structures': [],
+    'Algorithms': [],
+    'Code Review': ['code reviews'],
+})
+
 TECH_NAMES = set(SKILLS)        # everything above is technology; below are business / HR / operations skills
 
 # business, HR, workforce, recruiting, operations, finance and management skills (non-tech profiles)
@@ -144,6 +295,12 @@ AMBIGUOUS |= {"forecast", "roster", "reward", "benefits", "sales", "interviews",
 # tech words that mean something else in a business JD ("networking" = meeting people, "pipeline" = candidates)
 TECH_WORDY = {"Networking", "Docker", "Bash", "Observability", "ELB", "Security", "High Availability", "Git", "Oracle",
               "REST API", "SRE", "Machine Learning", "Statistics", "Routing", "Switching", "Lightning", "Express"}
+
+TECH_WORDY |= {"Assembly", "Fine-tuning", "Memory Management", "Storage Systems", "Data Quality", "Data Governance",
+               "Incident Response", "Algorithms", "Firmware", "Compilers", "Operating Systems", "Virtual Machines",
+               "Load Balancing", "Design Patterns", "Code Review", "System Design", "Data Structures", "Firewalls",
+               "Envoy", "Nomad", "Backstage", "Sentry", "Loki", "Honeycomb", "Pinecone", "Jest", "Mocha", "Dart", "Vite",
+               "Unity", "Synapse", "Spring", "Kerberos", "Bigtable", "Prompt Engineering", "Threat Modeling", "HTTP", "Lua"}
 
 # soft words that are not real skills even if they appear in a resume's skills list
 SOFT = {"communication", "communication skills", "teamwork", "team player", "leadership", "problem solving",
@@ -507,6 +664,29 @@ _CAPS = re.compile(r"(?<![A-Za-z0-9])([A-Z][A-Za-z0-9+#./-]*[A-Z0-9][A-Za-z0-9+#
 _CAPS_STOP = {"US", "USA", "UK", "EEO", "EOE", "LLC", "INC", "LTD", "NJ", "NY", "CA", "TX", "PTO", "HR", "CEO", "CTO",
               "FAQ", "ID", "IT", "OK", "PST", "EST", "CST", "EU", "W2", "C2C", "H1B", "GC", "USC", "OPT", "CPT", "TN",
               "EAD", "DOE", "COVID", "ADA", "VP", "AM", "PM", "II", "III", "IV", "JD", "FTE", "WFH", "ASAP", "AND", "THE"}
+_CAPS_STOP |= {"CPU", "USD", "EAR", "ITAR", "DOD", "SOS", "SPA", "H-1B", "H1-B", "TS/SCI", "SCI", "SSN", "DOB", "EOE/AA",
+               "AA", "EEOC", "OFCCP", "PAY", "SALARY", "BENEFITS", "REMOTE", "HYBRID", "ONSITE", "NOTE", "URGENT",
+               "REQUIRED", "PREFERRED", "MUST", "PLUS", "NICE", "BONUS", "DUTIES", "ROLE", "TEAM", "ABOUT", "JOB", "W-2",
+               "1099", "C2H", "CTH", "FT", "PT", "HR", "IST", "PDT", "EDT", "CDT", "MST", "UTC", "GMT", "BS", "MS", "BA",
+               "MBA", "PHD", "PH.D", "STEM", "NDA", "LCA", "GCP-EAD", "USA-BASED"}
+
+
+def _tool_like(tok):
+    """Does a capitalised word from a JD look like a tool / technology name (not 'On-Site', 'U.S', 'FOUNDRY', 'E1')?"""
+    if "." in tok.strip(".") and not re.search(r"\.(js|net|io)$", tok, re.I):
+        return False                                        # U.S, Ph.D (but Node.js / ASP.NET are fine)
+    if len(tok) <= 2:
+        return False                                        # SE, DC, VA, MA, E1
+    if sum(c.isdigit() for c in tok) >= 4 or re.fullmatch(r"[A-Z]\d{1,2}", tok):
+        return False                                        # requisition numbers, E1 / E2
+    parts = [x for x in re.split(r"[-/]", tok) if x]
+    if len(parts) > 1 and any(re.fullmatch(r"[A-Z]?[a-z]{2,}", x) for x in parts):
+        return False                                        # On-Site, Model-Driven, Forward-Looking, AI-enabled
+    if tok.isalpha() and tok.isupper() and len(tok) >= 6:
+        return False                                        # FOUNDRY, AGENTIC: words written in capitals
+    return True
+
+
 _REQ_LINE = re.compile(r"experience|knowledge|proficien|familiar|skill|required|requirement|preferred|must|nice to have|"
                        r"qualification|hands-on|expert|strong|working with|using|tools?|technolog|stack", re.I)
 
@@ -514,6 +694,14 @@ _REQ_LINE = re.compile(r"experience|knowledge|proficien|familiar|skill|required|
 _NOISE = {"services", "service", "management", "support", "systems", "system", "tools", "platforms", "platform",
           "applications", "solutions", "operations", "process", "processes", "incident", "testing", "engineering",
           "development", "software", "technology", "data", "cloud", "infrastructure", "performance", "security"}
+
+
+# HR words in a tech JD are about the company (benefits, hiring process), not skills the engineer needs
+HR_BOILER = {"compensation and benefits", "onboarding", "recruiting", "recruitment", "diversity and inclusion",
+             "work permits", "rpo", "payroll", "interviewing", "employer branding", "talent management",
+             "candidate sourcing", "end-to-end recruitment", "people-management", "global mobility", "internal mobility",
+             "employee engagement", "employee relations", "learning and development", "absence management",
+             "hr policies", "talent acquisition", "benefits", "utilization", "utilisation"}
 
 
 def is_tech(text):
@@ -549,7 +737,7 @@ def _jd_keywords(jd, resume_text="", company=""):
         for p in pats:
             m = p.search(low)
             if m:
-                return jd[m.start():m.end()]
+                return re.sub(r"\s+", " ", jd[m.start():m.end()])      # "Azure\nDevOps" -> "Azure DevOps"
         return default
 
     tech = is_tech(jd)
@@ -568,6 +756,8 @@ def _jd_keywords(jd, resume_text="", company=""):
         if n:
             items.append((spelled([p], t), t, min(n, 3), "hard", first_pos([p])))
     company_words = {w for w in re.split(r"\W+", (company or "").lower()) if w}
+    cw = [w for w in re.findall(r"[A-Za-z0-9]+", company or "") if w.lower() not in {"inc", "llc", "ltd", "corp", "co"}]
+    company_words |= {"".join(w[0] for w in cw).lower(), "".join(w[0] for w in cw if w[0].isupper()).lower()} - {""}
     for line in (jd.splitlines() or [jd]) if tech else []:     # unknown tool names: only in tech JDs (not "LCY")
         if not _REQ_LINE.search(line):
             continue
@@ -575,6 +765,8 @@ def _jd_keywords(jd, resume_text="", company=""):
             tok = m.group(1).strip(".-/")
             up = sum(c.isupper() for c in tok) + sum(c.isdigit() for c in tok)
             if len(tok) < 2 or len(tok) > 20 or up < 2 or tok.upper() in _CAPS_STOP or tok.lower() in company_words:
+                continue
+            if not _tool_like(tok):
                 continue
             if tok.lower() in _KNOWN or any(tok.lower() == i[1] for i in items):
                 continue
@@ -586,7 +778,7 @@ def _jd_keywords(jd, resume_text="", company=""):
     keys = {i[1] for i in items}
     for disp, key, w, kind, pos in sorted(items, key=lambda i: (i[3] != "hard", -i[2], i[4])):
         if key in seen or key in _NOISE or key in company_words or (company and key in company.lower()) \
-                or key in GEO_WORDS or key in GENERIC_WORDS:
+                or key in GEO_WORDS or key in GENERIC_WORDS or (tech and key in HR_BOILER):
             continue
         if " " not in key and any(key != k and re.search(r"(?<![a-z])" + re.escape(key) + r"(?![a-z])", k) for k in keys):
             continue                     # "automation" when "automation testing" is there too
@@ -638,9 +830,12 @@ def ats_report(jd, resume_text, job_title="", company=""):
     soft_pct = round(100 * sum(1 for k in soft if count(k[0], k[1])) / len(soft)) if soft else 100
     soft_missing = [k[0] for k in soft if not count(k[0], k[1])]
 
-    t = re.sub(r"\s*[\(\[|].*$|\s+-\s+.*$", "", job_title or "").strip().lower()
+    t = re.sub(r"\s*[\(\[|].*$|\s+[-–—]\s+.*$", "", job_title or "").strip().lower()
+    t = re.sub(r"\s+", " ", t)
+    flat = re.sub(r"\s+", " ", low)                          # a title wrapped onto the next line still counts
     core = " ".join(w for w in re.sub(r"[^a-z0-9+#/ ]", " ", t).split() if w not in LEVEL_WORDS)
-    title_pct = 100 if t and t in low else (70 if core and core in low else 0)
+    flat_words = " ".join(re.sub(r"[^a-z0-9+#/ ]", " ", flat).split())
+    title_pct = 100 if t and t in flat else (70 if core and core in flat_words else 0)
 
     need = jd_years(jd)
     have = years_of_experience(resume_text)
@@ -671,3 +866,27 @@ def ats_report(jd, resume_text, job_title="", company=""):
     return {"score": score, "hard": hard_pct, "title": title_pct, "soft": soft_pct, "experience": exp_pct,
             "education": edu_pct, "format": fmt_pct, "missing": missing, "too_few": too_few,
             "soft_missing": soft_missing, "tips": tips, "keywords": len(hard)}
+
+
+# ---------------------------------------------------------------- which jobs are most likely to bring a call
+def call_chance(job, resume_years=None, roles=(), now=None):
+    """0-100: how likely this application is to get a recruiter call, from what recruiters screen on:
+    skills match (45%), how fresh the post is (25%: the first applicants get most calls), years asked vs the
+    candidate's (20%), and whether the job title is one of the candidate's roles (10%)."""
+    from datetime import datetime
+    now = now or datetime.now()
+    match = job.get("ats_after") or job.get("tailored_match") or job.get("match") or 0
+    when = job.get("posted_at") or job.get("saved_at") or ""
+    try:
+        hours = (now - datetime.fromisoformat(str(when)[:19].replace("T", " "))).total_seconds() / 3600
+    except ValueError:
+        hours = 24 * 7
+    fresh = 100 if hours <= 24 else 85 if hours <= 48 else 65 if hours <= 72 else 45 if hours <= 24 * 7 else 20
+    need = jd_years(job.get("jd") or "")
+    if need is None or resume_years is None:
+        exp = 80
+    else:
+        gap = need - resume_years
+        exp = 100 if gap <= 0 else 75 if gap <= 1 else 35 if gap <= 2 else 10
+    fit = 100 if title_fit(job.get("title") or "", roles) else 40
+    return round(0.45 * min(match, 100) + 0.25 * fresh + 0.20 * exp + 0.10 * fit)

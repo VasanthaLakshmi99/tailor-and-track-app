@@ -8,6 +8,7 @@
 """
 VERSION = "2026-11-03a"   # all Tailor&Track files must have the same version
 import json
+from datetime import datetime
 import re
 
 import autotailor
@@ -157,9 +158,12 @@ def _start_at_name(text, master_text):
     return "\n".join(lines)
 
 
-def check_ai(answer_text, master_text):
-    """Facts check of an AI-written resume against the master: new employers, dates or numbers, lost jobs."""
+def check_ai(answer_text, master_text, confirmed=()):
+    """Facts check of an AI-written resume against the master: new employers, dates, numbers or tools, lost jobs."""
     a, m = autotailor.parse(answer_text), autotailor.parse(master_text)
+    known = master_text + "\n" + "\n".join(confirmed or ())
+    new_tools = sorted(set(matching.find_skills(answer_text, strict=True)) - set(matching.find_skills(known, strict=True)))
+    new_tools = [t for t in new_tools if t.lower() not in autotailor.GENERIC_TERMS]
     words = lambda s: set(re.findall(r"[a-z]{3,}", (s or "").lower()))
     issues = []
     master_dates = {re.sub(r"\s+", " ", jb["dates"]).lower() for jb in m["experience"] if jb["dates"]}
@@ -178,15 +182,22 @@ def check_ai(answer_text, master_text):
         issues.append("Numbers not in the master: " + ", ".join(new_nums[:10]))
     if not a["experience"]:
         issues.append("No work experience found: check the answer follows the format")
+    if new_tools:
+        issues.append("Skills not in the master or confirmed: " + ", ".join(new_tools[:10]))
     return a, issues
 
 
-def save_ai_answer(job, answer_text, master_text):
-    """Turn the pasted Claude / ChatGPT answer into the tailored PDF (master layout). Returns (path, pct, missing, issues)."""
+def save_ai_answer(job, answer_text, master_text, confirmed=None, strict=False):
+    """Turn the pasted Claude / ChatGPT answer into the tailored PDF (master layout). Returns (path, pct, missing, issues).
+    strict=True (automatic Gemini rewrite): refuse an answer that breaks a fact instead of saving it."""
     text = _start_at_name(_clean_ai(answer_text), master_text)
     if len(text) < 300:
         raise ValueError("The answer looks too short: paste the whole resume the AI wrote")
-    r, issues = check_ai(text, master_text)
+    if confirmed is None:
+        confirmed = db.confirmed_list(db.profile(job.get("profile_id")) or {})
+    r, issues = check_ai(text, master_text, confirmed)
+    if strict and issues:
+        raise ValueError("AI answer failed the facts check: " + "; ".join(issues[:3]))
     m = autotailor.parse(master_text)
     r["name"] = r["name"] or m["name"]
     r["contact"] = r["contact"] or m["contact"]
@@ -223,7 +234,15 @@ def save_tailored(job, filename, data):
     return path, pct, missing
 
 
-def auto_tailor(job, ticked=(), remember=True):
+def _note(job, text):
+    try:
+        with db.connect() as con:
+            con.execute("UPDATE jobs SET tailor_note=? WHERE id=?", (text, job["id"]))
+    except Exception:
+        pass
+
+
+def auto_tailor(job, ticked=(), remember=True, use_ai=None, all_jd=None):
     """Build the tailored PDF automatically (see autotailor.py). ticked = JD skills the user confirmed
     the candidate has used. remember=True keeps them for every next job of this candidate.
     Returns (path, new_match, still_missing)."""
@@ -233,15 +252,32 @@ def auto_tailor(job, ticked=(), remember=True):
         db.add_confirmed_skills(job["profile_id"], list(ticked))
     confirmed = db.confirmed_list(db.profile(job["profile_id"])) + [t for t in ticked or [] if t]
     resume = (profile or {}).get("text") or ""
+    if all_jd is None:
+        all_jd = db.setting(f"tick_all_{job['profile_id']}", "0") == "1"
+    if all_jd:                                   # "Tick all JD skills": the candidate has this JD's other skills too
+        confirmed = list(dict.fromkeys(confirmed + autotailor.gaps(job, resume)))
     if not resume.strip():
         raise ValueError("Upload the master resume first")
     if not (job.get("jd") or "").strip():
         raise ValueError("This job has no JD yet. Open it and click the J button first")
-    r = autotailor.tailor(job, resume, confirmed, roles=db.roles_for_search(profile))
+    why = ""
+    if use_ai is None:
+        use_ai = gemini_ready() and db.setting("gemini_auto", "1") == "1"
+    if use_ai and gemini_ready() and gemini_left_today():
+        try:
+            path, pct, missing, issues = gemini_rewrite(job, confirmed)
+            _note(job, "Rewritten by Gemini")
+            return path, pct, missing
+        except Exception as e:                                # facts check failed / no quota: built-in tailoring
+            why = f"Gemini not used: {str(e)[:140]}"
+    r = autotailor.tailor(job, resume, confirmed, roles=db.roles_for_search(profile), all_jd=all_jd)
     r["links"] = db.resume_links(profile)                     # LinkedIn / GitHub / e-mail stay clickable
     r["anchors"] = db.resume_anchors(profile)
     data = autotailor.to_pdf(r)
-    return save_tailored(job, "auto.pdf", data)
+    out = save_tailored(job, "auto.pdf", data)
+    if why:
+        _note(job, why)
+    return out
 
 
 def guess_job(filename, jobs):
@@ -276,3 +312,82 @@ def resumes_zip(jobs):
                 seen.add(p.name)
                 n += 1
     return buf.getvalue(), n
+
+
+# ---------------------------------------------------------------- free automatic rewrite (Google Gemini API key)
+GEMINI_MODELS = ("gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.8-flash")   # free-tier models, best first
+GEMINI_DAILY = 450        # the free tier gives about 500 a day on the Flash-Lite models; keep some spare
+
+
+def gemini_ready():
+    return bool((db.setting("gemini_key") or "").strip())
+
+
+def gemini_left_today():
+    return max(0, GEMINI_DAILY - int(db.setting(f"gemini_calls_{datetime.now():%Y-%m-%d}", "0") or 0))
+
+
+def _redact(master_text):
+    """Name, e-mail, phone and links are replaced before anything is sent to Google; put back in the answer."""
+    m = autotailor.parse(master_text)
+    swaps = []
+    if m.get("name"):
+        swaps.append((m["name"].strip(), "Candidate Name"))
+    for i, e in enumerate(sorted(set(re.findall(r"[\w.+-]+@[\w-]+\.[\w.]+", master_text))), 1):
+        swaps.append((e.rstrip("."), f"candidate{i}@example.com"))
+    for i, ph in enumerate(sorted(set(re.findall(r"\+?\(?\d[\d\s().-]{8,}\d", master_text)), key=len, reverse=True), 1):
+        if len(re.sub(r"\D", "", ph)) >= 9:
+            swaps.append((ph.strip(), f"000-000-00{i:02d}"))
+    for i, u in enumerate(sorted(set(re.findall(r"(?:https?://|www\.)\S+|(?:linkedin|github)\.com/\S+", master_text, re.I)),
+                                 key=len, reverse=True), 1):
+        swaps.append((u.rstrip(".,;)"), f"https://link-{i}.example"))
+    red = master_text
+    for real, fake in swaps:
+        red = red.replace(real, fake)
+    return red, swaps
+
+
+def gemini_rewrite(job, confirmed=()):
+    """Real rewrite of the resume for this JD by Google's free Gemini API, checked against the master
+    (same employers, titles, dates, numbers and tools) before it is saved. Returns (path, pct, missing, issues)."""
+    import requests
+    profile = db.profile(job["profile_id"])
+    master = (profile or {}).get("text") or ""
+    if not master.strip():
+        raise ValueError("Upload the master resume first")
+    if not gemini_left_today():
+        raise ValueError("Today's free Gemini rewrites are used up; it resets tomorrow")
+    red, swaps = _redact(master)
+    prompt = ai_prompt(job, red, confirmed)
+    key = (db.setting("gemini_key") or "").strip()
+    day = f"gemini_calls_{datetime.now():%Y-%m-%d}"
+    models = [db.setting("gemini_model")] if db.setting("gemini_model") else list(GEMINI_MODELS)
+    text, last = "", ""
+    for model in models:
+        db.set_setting(day, str(int(db.setting(day, "0") or 0) + 1))
+        r = requests.post(f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+                          headers={"x-goog-api-key": key, "Content-Type": "application/json"}, timeout=120,
+                          json={"contents": [{"parts": [{"text": prompt}]}],
+                                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192}})
+        if r.status_code == 404:
+            last = f"model {model} not available"
+            continue
+        if r.status_code in (400, 401, 403) and "key" in r.text.lower():
+            raise ValueError("Gemini key not accepted: check it in 🔎 Find jobs → Free API keys")
+        if r.status_code == 429:
+            raise ValueError("Gemini free limit reached for now; try again later or tomorrow")
+        if not r.ok:
+            last = f"Gemini error {r.status_code}"
+            continue
+        parts = ((r.json().get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+        text = "".join(p.get("text", "") for p in parts)
+        if text.strip():
+            if not db.setting("gemini_model"):
+                db.set_setting("gemini_model", model)          # remember the model that works
+            break
+    if not text.strip():
+        raise ValueError(f"Gemini gave no answer ({last or 'empty'})")
+    text = text.split("SKILLS TO CONFIRM:")[0]
+    for real, fake in swaps:
+        text = text.replace(fake, real)
+    return save_ai_answer(job, text, master, confirmed=confirmed, strict=True)

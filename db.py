@@ -137,6 +137,9 @@ def init_db():
                 con.execute(f"ALTER TABLE jobs ADD COLUMN {col} {kind}")
         if "origin" not in _columns(con, "jobs"):                 # 'collect' | 'j' | 'import' | 'manual'
             con.execute("ALTER TABLE jobs ADD COLUMN origin TEXT")
+        for col in ("outcome", "outcome_at"):                 # what came of the application (call, interview …)
+            if col not in _columns(con, "jobs"):
+                con.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
         for col in ("tailor_status", "tailor_note"):          # automatic tailoring (step 2)
             if col not in _columns(con, "jobs"):
                 con.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
@@ -1116,3 +1119,38 @@ def counts(pid):
 
 
 init_db()
+
+# ---------------------------------------------------------------- results: calls and interviews
+OUTCOMES = ["", "📞 Recruiter call", "🗓 Interview", "🏁 Final round", "🎉 Offer", "❌ Rejected", "🔇 No reply"]
+SHORTLISTED = {"📞 Recruiter call", "🗓 Interview", "🏁 Final round", "🎉 Offer"}
+
+
+def set_outcome(job_id, outcome):
+    with connect() as con:
+        con.execute("UPDATE jobs SET outcome=?, outcome_at=? WHERE id=?",
+                    (outcome or None, now() if outcome else None, job_id))
+
+
+def outcome_stats(pid, month=None):
+    """Calls this month and what brings them: by source and by match band (applied jobs only)."""
+    month = month or datetime.now().strftime("%Y-%m")
+    with connect() as con:
+        rows = [dict(r) for r in con.execute(
+            "SELECT source, match, tailored_match, outcome, outcome_at, applied_at FROM jobs "
+            "WHERE profile_id=? AND status='applied'", (pid,))]
+    calls_month = sum(1 for r in rows if r["outcome"] in SHORTLISTED and (r["outcome_at"] or "").startswith(month))
+    applied_month = sum(1 for r in rows if (r["applied_at"] or "").startswith(month))
+
+    def table(key):
+        out = {}
+        for r in rows:
+            k = key(r)
+            a, c = out.get(k, (0, 0))
+            out[k] = (a + 1, c + (r["outcome"] in SHORTLISTED))
+        return sorted(((k, a, c, round(100 * c / a, 1)) for k, (a, c) in out.items()), key=lambda x: (-x[3], -x[1]))
+
+    band = lambda r: (lambda m: "90%+" if m >= 90 else "80–89%" if m >= 80 else "70–79%" if m >= 70 else "60–69%"
+                      if m >= 60 else "under 60%")(r["tailored_match"] or r["match"] or 0)
+    return {"calls_month": calls_month, "applied_month": applied_month,
+            "calls_total": sum(1 for r in rows if r["outcome"] in SHORTLISTED), "applied_total": len(rows),
+            "by_source": table(lambda r: r["source"] or "?"), "by_match": table(band)}

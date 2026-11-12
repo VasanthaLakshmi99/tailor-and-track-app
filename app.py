@@ -1201,16 +1201,31 @@ def tailor_page():
                     "bullets first, a summary for the role, and the JD skills you tick added to Skills and work experience.")
         tick_all = st.toggle("✅ Tick all JD skills for every job (the candidate has used them)",
                              value=db.setting(f"tick_all_{PID}", "0") == "1", key=f"tick_all_global_{PID}",
-                             help="ON: every job's missing JD skills are added to that job's resume (Skills + work "
-                                  "experience) without opening the cards. They are used only for that job's resume. "
+                             help="ON: each job's missing JD skills are worked into that job's resume (next to the "
+                                  "candidate's tools of the same kind in the work experience, and in Skills), and the "
+                                  "summary names the JD's exact job title. Used only for that job's resume. "
                                   "OFF: only the master resume and the skills you confirmed are used.")
         if tick_all != (db.setting(f"tick_all_{PID}", "0") == "1"):
             db.set_setting(f"tick_all_{PID}", "1" if tick_all else "0")
+        if tick_all:
+            st.caption("⚠️ The candidate should be ready to answer interview questions on every skill in each resume.")
+        gemini_box()
         g1, g2, g3 = st.columns([2, 2, 3], vertical_alignment="bottom")
         floor = g1.selectbox("Jobs with match", [0, 50, 60, 70, 80], index=2,
                              format_func=lambda v: "All jobs" if v == 0 else f"{v}%+ (before tailoring)")
         batch = [j for j in todo if (j["match"] or 0) >= floor and (j["jd"] or "").strip()]
-        go = g2.button(f"⚡ Auto-tailor {len(batch)} job(s)", type="primary", disabled=not batch, width="stretch")
+        goal_day = int(db.setting(f"goal_day_{PID}", "50") or 50)
+        years, my_roles = matching.years_of_experience(P.get("text") or "") if P else None, db.roles_for_search(P) if P else []
+        best = sorted([j for j in todo if (j["jd"] or "").strip()],
+                      key=lambda j: matching.call_chance(j, years, my_roles), reverse=True)[:goal_day]
+        go_best = st.button(f"🎯 Auto-tailor today's best {len(best)} (highest chance of a call)", type="primary",
+                            disabled=not best, width="stretch",
+                            help="The jobs most likely to bring a recruiter call: best match, newest posts, years the "
+                                 "candidate has, and her roles. Apply to these first (Apply & track → sort by "
+                                 "Best chance of a call).")
+        go = g2.button(f"⚡ Auto-tailor {len(batch)} job(s)", disabled=not batch, width="stretch")
+        if go_best:
+            batch, go = best, True
         g3.caption("The new PDFs appear in the **Done** tab (⬇ download) and in Apply & track → Resume column. "
                    "Jobs without a JD are skipped: open them and click J first.")
         if go:
@@ -1218,8 +1233,7 @@ def tailor_page():
             for k, j in enumerate(batch, 1):
                 bar.progress(k / len(batch), text=f"{j['company']} · {j['title']}")
                 try:
-                    extra = autotailor.gaps(j, db.scoring_text(P)) if tick_all else []
-                    _, pct, _ = tailor.auto_tailor(j, extra, remember=False)
+                    _, pct, _ = tailor.auto_tailor(j, [], remember=False, all_jd=tick_all)
                     done_n += 1
                     ready_n += pct >= tailor.READY
                 except Exception as e:
@@ -1377,6 +1391,30 @@ def ai_rewrite_box(j):
                "master resume, and anything new is flagged.")
 
 
+def gemini_box():
+    """Free automatic rewriting (Google Gemini API key): each resume reworded for its JD, facts checked."""
+    with st.expander("✨ Real rewrite for every JD (free Google Gemini key) " +
+                     ("· ON" if tailor.gemini_ready() and db.setting("gemini_auto", "1") == "1" else "· off")):
+        st.markdown("With a free Gemini key, ⚡ Auto-tailor **rewrites** the summary, bullets and skills for each JD "
+                    "(not only reorders them). Every answer is checked against the master resume: if it adds an "
+                    "employer, title, date, number or tool the master doesn't have, it is thrown away and the built-in "
+                    "tailoring is used instead.")
+        st.caption("Privacy: the name, e-mail, phone and links are removed before the resume is sent. Google may use "
+                   "what free-tier users send to improve its products, and reviewers may read it. Leave this off if "
+                   "the candidate doesn't agree.")
+        c1, c2 = st.columns([3, 2], vertical_alignment="bottom")
+        key = c1.text_input("Gemini API key", db.setting("gemini_key"), type="password",
+                            help="Free at https://aistudio.google.com/apikey (Google account, no card)")
+        on = c2.toggle("Use it in ⚡ Auto-tailor", value=db.setting("gemini_auto", "1") == "1")
+        if key.strip() != (db.setting("gemini_key") or "") or on != (db.setting("gemini_auto", "1") == "1"):
+            db.set_setting("gemini_key", key.strip())
+            db.set_setting("gemini_auto", "1" if on else "0")
+            st.rerun()
+        if tailor.gemini_ready():
+            st.caption(f"Rewrites left today: about {tailor.gemini_left_today()} (free limit, resets every day). "
+                       "When they run out, the built-in tailoring is used.")
+
+
 def tailor_card(j):
     tm = j["tailored_match"]
     score = f"{j['match'] or 0}%" + (f" → **{tm}%** {'✅' if (tm or 0) >= tailor.READY else '⚠️'}" if j["resume_file"] else "")
@@ -1385,6 +1423,8 @@ def tailor_card(j):
     after = json.loads(j["ats_json"]) if j.get("ats_json") else None
     ats = (f" · ATS {before['score']}" if before else "") + (f" → **{after['score']}**" if after else "")
     st.markdown(f"**{j['company']}**  \n{title}  \nMatch {score}{ats}")
+    if j.get("tailor_note") and j["resume_file"]:
+        st.caption(("✨ " if j["tailor_note"].startswith("Rewritten") else "ℹ️ ") + j["tailor_note"])
     if not (j["jd"] or "").strip():
         st.caption("⚠️ No JD yet: open the job and click J first.")
     else:
@@ -1402,13 +1442,14 @@ def tailor_card(j):
             ticked = st.pills("Skills", gap, selection_mode="multi", default=gap if all_on else None,
                               key=f"gap_{j['id']}_{all_on}", label_visibility="collapsed")
             st.caption("All ticked because **Tick all** is ON at the top." if all_on else
-                       "Tip: switch on **Tick all** at the top to tick these for every job.")
+                       "Tick what the candidate can talk about in an interview. Ticked skills are remembered "
+                       "for this candidate's next resumes.")
         else:
             ticked = []
             st.caption("The resume already shows every JD skill Tailor&Track found.")
         if st.button("Create tailored PDF", type="primary", key=f"auto_{j['id']}", width="stretch"):
             try:
-                path, pct, miss = tailor.auto_tailor(j, ticked or [], remember=not all_on)
+                path, pct, miss = tailor.auto_tailor(j, ticked or [], remember=not all_on, all_jd=all_on)
                 msg = (f"{j['company']} · {j['title']}: **{path.name}** created. Match **{pct}%** (was {j['match']}%). "
                        "Download it in the **Done** tab.")
                 if autotailor.to_pdf.pages < autotailor.MIN_PAGES:
@@ -1451,10 +1492,13 @@ def apply_page():
     st.title("Apply & track")
     profile_banner()
 
+    goal_day = int(db.setting(f"goal_day_{PID}", "50") or 50)
     a, b, cc, d = st.columns(4)
     a.metric("Ready to apply", c["to_apply"])
-    b.metric("Applied today", c["applied_today"])
-    cc.metric("This month", c["applied_month"])
+    b.metric(f"Applied today (goal {goal_day})", c["applied_today"],
+             delta=f"{c['applied_today'] - goal_day:+d}" if c["applied_today"] < goal_day else "goal reached ✅",
+             delta_color="off" if c["applied_today"] < goal_day else "normal")
+    cc.metric("Applied this month", c["applied_month"])
     d.metric("This year", c["applied_year"])
 
     f1, f2, f5, f3, f4 = st.columns([2.6, 1.2, 1.3, 1.3, 1.1])
@@ -1464,7 +1508,10 @@ def apply_page():
                           help="Applied jobs: the day you applied. Not applied: the day the job was saved.")
     sort = f3.selectbox("Sort by", ["Newest applied", "Oldest applied", "Best match", "Newest saved", "Oldest saved"]
                         if status == "Applied" else
-                        ["Best match", "Newest saved", "Oldest saved", "Newest applied", "Oldest applied"])
+                        ["Best chance of a call", "Best match", "Newest saved", "Oldest saved", "Newest applied",
+                         "Oldest applied"],
+                        help="Best chance of a call: match (45%), how new the post is (25%), years asked vs the "
+                             "candidate's (20%), role fit (10%). Apply from the top.")
     if period == "Custom dates…":
         period = pick_dates("track")
     min_match = f4.selectbox("Match score", [0, 50, 60, 70, 80, 90], format_func=lambda v: "Any" if v == 0 else f"{v}%+")
@@ -1477,7 +1524,11 @@ def apply_page():
         data = [j for j in data if j["status"] != "applied"]
     elif status == "Applied":
         data = [j for j in data if j["status"] == "applied"]
-    if sort.startswith("Oldest"):
+    years, my_roles = matching.years_of_experience(P.get("text") or "") if P else None, db.roles_for_search(P) if P else []
+    chance = {j["id"]: matching.call_chance(j, years, my_roles) for j in data}
+    if sort == "Best chance of a call":
+        data.sort(key=lambda j: chance[j["id"]], reverse=True)
+    elif sort.startswith("Oldest"):
         col = "applied_at" if sort.endswith("applied") else "saved_at"
         data.sort(key=lambda j: (not j[col], j[col] or ""))     # oldest first, empty dates last
     else:
@@ -1502,8 +1553,9 @@ def apply_page():
                "Unticking it moves the job back to Not applied.")
     if data:
         df = pd.DataFrame([{
-            "id": j["id"], "applied": j["status"] == "applied", "company": j["company"], "title": j["title"],
-            "apply_url": j["apply_url"], "match": j["tailored_match"] or j["match"],
+            "id": j["id"], "applied": j["status"] == "applied",
+            "company": j["company"], "title": j["title"],
+            "apply_url": j["apply_url"], "chance": chance[j["id"]], "match": j["tailored_match"] or j["match"],
             "resume": api_server.resume_link(j),
             "source": j["source"], "saved": (j["saved_at"] or "")[:10], "applied_at": (j["applied_at"] or "")[:16],
             "exp": (lambda n: f"{n}+ yrs" if n is not None else "—")(matching.jd_years(j["jd"] or "")),
@@ -1516,6 +1568,8 @@ def apply_page():
             column_config={
                 "id": None,
                 "applied": st.column_config.CheckboxColumn("Applied ✓", width="small"),
+                "chance": st.column_config.ProgressColumn("Call chance", min_value=0, max_value=100, format="%d",
+                                                          width="small"),
                 "company": st.column_config.TextColumn("Company name", width="medium"),
                 "title": st.column_config.TextColumn("Role title", width="medium"),
                 "apply_url": st.column_config.LinkColumn("Apply link", display_text="Open ↗", width="small"),
