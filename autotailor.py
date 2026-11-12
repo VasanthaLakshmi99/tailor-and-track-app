@@ -200,6 +200,9 @@ def jd_terms(jd, resume_text):
     return out
 
 
+_CANON = {n.lower(): n for n in matching.SKILLS}
+_PRACTICES = ({t.lower() for t in matching.EXTRA_TERMS} | {t.lower() for t in matching.TECH_WORDY if t.upper() != t}
+              | {n.lower() for n in matching.SKILLS if n not in matching.TECH_NAMES})
 _KNOWN_LOW = {n.lower() for n in matching.SKILLS} | {a.lower() for v in matching.SKILLS.values() for a in v}
 _BUSINESS_LOW = ({n.lower() for n in matching.SKILLS if n not in matching.TECH_NAMES} |
                  {a.lower() for n, v in matching.SKILLS.items() if n not in matching.TECH_NAMES for a in v} |
@@ -345,17 +348,21 @@ SENIOR_WORDS = re.compile(r"\b(senior|sr\.?)\s+", re.I)
 
 def summary_title(job_title, resume_text):
     """The JD's job title for the summary (ATS tools look for it), without a level the resume can't back up."""
-    t = re.sub(r"\s*[\(\[|].*$", "", job_title or "").strip()
+    t = clean_title(job_title or "")
     t = re.split(r"\s+[-–—/]\s+|,", t)[0].strip()                    # "Lead Software Engineer - Cloud, AWS" -> first part
     years = matching.years_of_experience(resume_text) or 0
     if years < 8:
         t = LEAD_WORDS.sub("", t)
     if years < 5:
         t = SENIOR_WORDS.sub("", t)
-    t = re.sub(r"\b(i{1,3}|iv|[1-4])$", "", re.sub(r"\s+", " ", t)).strip(" -,")
+    t = re.sub(r"\b(i{1,3}|iv|[1-4])$", "", re.sub(r"\s+", " ", t), flags=re.I).strip(" -,")
     canon = {"devops": "DevOps", "aws": "AWS", "sre": "SRE", "gcp": "GCP", "devsecops": "DevSecOps", "mlops": "MLOps",
              "it": "IT", "qa": "QA", "ai": "AI", "ml": "ML", "etl": "ETL", "bi": "BI", "ui": "UI", "ux": "UX"}
     t = re.sub(r"[A-Za-z]+", lambda m: canon.get(m.group(0).lower(), m.group(0)), t)
+    if re.match(r"(of|for|and|&|in)\b", t, re.I) or not re.search(
+            r"engineer|developer|administrator|analyst|architect|specialist|consultant|scientist|lead|manager|sre|"
+            r"technician|programmer|tester|designer|officer|partner|executive|coordinator|recruiter|planner", t, re.I):
+        return None                    # "Manager of DevOps Engineering" without "Manager" is not a title
     return t or None
 
 
@@ -371,6 +378,8 @@ def _role_of(header):
     return (titles[0] if titles else parts[-1] if parts else "").strip()
 
 
+SUMMARY_KEEP = 1      # the master summary's sentences kept after the first one (the ones closest to the JD)
+MAX_PRACTICES = 10    # at most this many items in the summary's "Experienced in …" sentence
 KEEP_BULLETS = 5      # a job keeps at least this many bullets
 MAX_DROP = 3          # and loses at most this many (the ones that use none of the JD's skills)
 GENERIC_TERMS = {t.lower() for t in matching.EXTRA_TERMS} | {"ai", "devops", "sre", "apis", "api", "saas", "paas", "iaas",
@@ -408,20 +417,25 @@ def soft_shown(key, resume_text):
 
 
 # where a ticked tool fits into the master's own bullets: (tool words, the master's tool it goes next to)
+_B = lambda alts: r"(?<![a-z0-9])(?:" + alts + r")(?![a-z0-9])"      # whole words only ("rust" not in "zero-trust")
 WEAVE = [
-    (r"prometheus|grafana|datadog|splunk|new relic|elk|elastic|kibana|dynatrace|nagios|zabbix|appdynamics|opentelemetry|"
-     r"loki|jaeger|sentry|pagerduty|sumo", r"CloudWatch|Azure Monitor|monitoring"),
-    (r"gitlab|github actions|argo|circleci|azure devops|bamboo|teamcity|spinnaker|tekton|octopus|harness|flux|travis",
-     r"Jenkins|CodePipeline|CI/CD"),
-    (r"ansible|chef|puppet|salt|pulumi|bicep|cdk|arm template|crossplane|packer|terragrunt", r"Terraform|CloudFormation"),
-    (r"helm|openshift|istio|rancher|ecs|fargate|aks|gke|kustomize|podman|rke|k3s|nomad", r"Kubernetes|EKS|Docker"),
-    (r"azure|gcp|google cloud|oracle cloud|oci|openstack|vmware", r"\bAWS\b(?=\s+(?:infrastructure|cloud|environments?|resources|accounts|workloads|services)\b)"),
-    (r"\bgo\b|golang|typescript|ruby|groovy|powershell|scala|c#|\.net|rust|perl|node", r"Python|Bash"),
-    (r"postgres|mysql|mongodb|redis|sql server|oracle|cassandra|aurora|elasticache|cosmos", r"RDS|DynamoDB|SQL"),
-    (r"kafka|rabbitmq|kinesis|pub/sub|event hub|sns", r"SQS"),
-    (r"vault|snyk|sonarqube|trivy|guardduty|okta|wiz|prisma|checkov|aqua|crowdstrike|waf|cloudflare", r"Secrets Manager|KMS|IAM"),
-    (r"windows server|unix|ubuntu|rhel|centos|active directory", r"Linux"),
-    (r"route 53|cloudfront|elb|alb|nlb|api gateway|vpn|direct connect|transit gateway", r"VPC|ALB"),
+    (_B(r"prometheus|grafana|datadog|splunk|new relic|elk|elastic\w*|kibana|dynatrace|nagios|zabbix|appdynamics|"
+        r"opentelemetry|loki|jaeger|sentry|pagerduty|sumo logic"), _B(r"CloudWatch|Azure Monitor")),
+    (_B(r"gitlab(?: ci)?|github actions|argo ?cd|argo|circleci|azure devops|bamboo|teamcity|spinnaker|tekton|octopus|"
+        r"harness|flux|travis ci"), _B(r"Jenkins")),
+    (_B(r"ansible|chef|puppet|saltstack|salt|pulumi|bicep|aws cdk|cdk|arm templates?|crossplane|packer|terragrunt"),
+     _B(r"Terraform")),
+    (_B(r"openshift|rancher|ecs|fargate|aks|gke|rke2?|k3s|nomad"), _B(r"Kubernetes")),   # Helm / Istio: own sentence
+    (_B(r"azure|gcp|google cloud|oracle cloud|oci|openstack|vmware"),
+     r"\bAWS\b(?=\s+(?:infrastructure|cloud|environments?|resources|accounts|workloads|services)\b)"),
+    (_B(r"go|golang|typescript|ruby|groovy|powershell|scala|c#|\.net|rust|perl|node\.js|nodejs"), _B(r"Python")),
+    (_B(r"postgres(?:ql)?|mysql|mongodb|redis|sql server|oracle|cassandra|aurora|elasticache|cosmos ?db"),
+     _B(r"RDS|DynamoDB")),
+    (_B(r"kafka|rabbitmq|kinesis|pub/sub|event hubs?"), _B(r"SQS")),
+    (_B(r"vault|snyk|sonarqube|trivy|guardduty|okta|wiz|prisma cloud|checkov|aqua|crowdstrike|waf"),
+     _B(r"Secrets Manager|KMS")),
+    (_B(r"windows server|unix|ubuntu|rhel|centos|active directory"), _B(r"Linux")),
+    (_B(r"route 53|cloudfront|elb|nlb|api gateway|direct connect|transit gateway"), _B(r"VPC")),
 ]
 
 
@@ -493,8 +507,21 @@ SOFT_PHRASE = {"cross-functional": "cross-functional collaboration", "stakeholde
                "mentoring": "mentoring", "collaboration": "collaboration"}
 
 
+def canon(d):
+    """A skill as it is usually written: 'tableau' -> 'Tableau', 'aws' -> 'AWS'."""
+    return _CANON.get((d or "").lower(), d)
+
+
 def _word(x):
-    """'Documentation' -> 'documentation' inside a sentence; 'APIs', 'SLOs', 'CI/CD' keep their capitals."""
+    """'Documentation' -> 'documentation' inside a sentence; 'APIs', 'SLOs', 'CI/CD' keep their capitals;
+    known tools written the standard way ('windows server' -> 'Windows Server')."""
+    words_title = " " in x.strip() and all(w[:1].isupper() and w[1:].islower() for w in x.split() if w.isalpha())
+    if sum(c.isupper() for c in x) > 1 and not words_title:
+        return x                                               # APIs, SLOs, SRE, Generative AI
+    if x.lower() in _PRACTICES:
+        return x.lower()                                       # incident response, high availability
+    if x.lower() in _CANON:
+        return _CANON[x.lower()]                               # Windows Server, Tableau
     return x if sum(c.isupper() for c in x) > 1 or not x[:1].isupper() else x[0].lower() + x[1:]
 
 
@@ -510,7 +537,7 @@ def _summary_for_jd(summary, hard, soft, job, title, resume_text, full_title=Fal
     rel = lambda x: sum(w for w, p1, p2 in pats if p1.search(x.lower()) or p2.search(x.lower()))
     head, rest = sentences[:1], sentences[1:]
     edu = [x for x in rest if re.search(r"\b(ms|bs|ba|ma|mba|phd|bachelor|master)'?s?\b|\bdegree\b", x, re.I) and len(x) < 90]
-    rest = sorted([x for x in rest if x not in edu], key=rel, reverse=True)
+    rest = sorted([x for x in rest if x not in edu], key=rel, reverse=True)[:SUMMARY_KEEP]
     out = " ".join(head + rest + edu).strip()
     if out and not out.endswith((".", "!", "?")):
         out += "."
@@ -564,7 +591,7 @@ def tailor(job, resume_text, confirmed=(), roles=(), all_jd=False):
     kws = matching.jd_keywords(job.get("jd") or "", resume_text, job.get("company") or "")
     ticked = {c.lower() for c in confirmed}
     is_have = lambda d, k: matching.has_keyword(full_text, d, k) or d.lower() in ticked or k in ticked
-    hard = [(d, k, w) for d, k, w, kind in kws if kind == "hard" and is_have(d, k)]
+    hard = [(canon(d) if d.islower() else d, k, w) for d, k, w, kind in kws if kind == "hard" and is_have(d, k)]
     soft = [(d, k, w) for d, k, w, kind in kws if kind == "soft" and (is_have(d, k) or soft_shown(k, resume_text))]
     soft = list({k: (d, k, w) for d, k, w in soft}.values())
     in_resume = lambda d, k: matching.has_keyword(resume_text, d, k)
@@ -576,6 +603,9 @@ def tailor(job, resume_text, confirmed=(), roles=(), all_jd=False):
     title = summary_title(job.get("title") or "", resume_text) if fit else None
     if title and not title_backed(title, full_text):
         title = None                    # "Power Platform Engineer", "Snowflake Admin": not this candidate's job title
+    held = [_role_of(jb["header"]) for jb in r["experience"]] + [re.split(r"\s+(with|having)\s+", r["summary"] or "")[0][:60]]
+    if title and not matching.title_fit(title, [h for h in held if h]):
+        title = None                    # "Data Analyst III" on a DevOps engineer's resume: keep her own title
 
     # 1. summary: the master's summary; the JD title replaces the master's title (only when the job fits the profile);
     #    JD keywords not yet in the summary are named once; ticked soft skills at the end
@@ -649,9 +679,19 @@ def tailor(job, resume_text, confirmed=(), roles=(), all_jd=False):
                 and not matching.has_keyword(r["summary"], d, k)]
         once = [d for d in once if (_known_skill(d) or d.lower() in GENERIC_TERMS)
                 and d.lower() not in _company_initials(job.get("company"))]
-        once = [d for d in once if not any(d != o and d.lower() in o.lower() for o in once)][:8]
+        once = [d for d in once if not any(d != o and d.lower() in o.lower() for o in once)
+                and d.lower() not in {"kpis", "kpi"} | matching.HR_BOILER]
+        m0 = re.search(r" Experienced in ([^.]*)\.", r["summary"])
+        room = MAX_PRACTICES - (len(re.split(r",\s*|\s+and\s+", m0.group(1))) if m0 else 0)
+        once = once[:max(0, room)]
         if once:
-            r["summary"] += f" Also skilled in {_join([_word(x) for x in once])}."
+            add = _join([_word(x) for x in once])
+            if " Experienced in " in r["summary"]:
+                r["summary"] = re.sub(r"( Experienced in [^.]*?)(?: and ([^.]*))?\.",
+                                      lambda m: f"{m.group(1)}{', ' + m.group(2) if m.group(2) else ''}, {add}.",
+                                      r["summary"], count=1)
+            else:
+                r["summary"] += f" Experienced in {add}."
     r["added"] = added
     return r
 

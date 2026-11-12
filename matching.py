@@ -684,6 +684,10 @@ def _tool_like(tok):
         return False                                        # On-Site, Model-Driven, Forward-Looking, AI-enabled
     if tok.isalpha() and tok.isupper() and len(tok) >= 6:
         return False                                        # FOUNDRY, AGENTIC: words written in capitals
+    if re.fullmatch(r"[A-Z]{2,4}s", tok) and tok[:-1] not in {"API", "SLA", "SLO", "VM", "OS", "CRD", "LLM"}:
+        return False                                        # PMs, SMEs, TAMs: people, not tools
+    if re.fullmatch(r"(Gen|Ver|Rev|Tier|Level|Phase|Step|Wave)\d+", tok, re.I):
+        return False                                        # Gen2, Tier1
     return True
 
 
