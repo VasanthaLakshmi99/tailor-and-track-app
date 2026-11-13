@@ -1607,21 +1607,35 @@ def apply_page():
 
     # reports
     with st.container(border=True):
-        st.subheader("📊 Excel report")
+        st.subheader("📊 Excel / CSV report")
         r1, r2 = st.columns(2)
         period = r1.selectbox("Period", report.PERIODS, index=2)
-        what = r2.radio("Include", ["Applied jobs only", "All saved jobs"], horizontal=True)
+        what = r2.radio("Include", ["Applied jobs only", "Not applied yet", "All saved jobs"], horizontal=True,
+                        help="Not applied yet: the jobs to tailor next (e.g. upload the CSV to Claude).")
         if period == "Custom dates…":
             period = pick_dates("report")
-        xls, n = report.excel(PID, period, applied_only=(what == "Applied jobs only"))
-        label = report.file_label(PID, period)
-        d1, d2 = st.columns(2)
-        d1.download_button(f"⬇ Download Excel ({n} jobs)", xls, file_name=f"{label}.xlsx", type="primary",
-                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=not n)
+        mode = {"Applied jobs only": True, "Not applied yet": "todo", "All saved jobs": False}[what]
+        xls, n = report.excel(PID, period, applied_only=mode)
+        csv_bytes, nc = report.csv_file(PID, period, applied_only=mode)
+        label = report.file_label(PID, period) + ("_to_apply" if mode == "todo" else "")
+        d1, d2, d3 = st.columns(3)
+        d1.download_button(f"⬇ Excel ({n} jobs)", xls, file_name=f"{label}.xlsx", type="primary",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", disabled=not n,
+                           width="stretch")
+        d2.download_button(f"⬇ CSV with full JDs ({nc} jobs)", csv_bytes, file_name=f"{label}_full_JDs.csv",
+                           mime="text/csv", disabled=not nc, width="stretch",
+                           help="Every job's complete JD in one column, no length limit. Upload it to Claude / "
+                                "ChatGPT together with the master resume to tailor resumes there.")
         z, nz = report.resumes_zip(PID, period)
-        d2.download_button(f"⬇ Resumes used ({nz} files, ZIP)", z, file_name=f"{label}_resumes.zip",
-                           mime="application/zip", disabled=not nz)
-        st.caption("Excel columns: " + ", ".join(report.COLUMNS))
+        d3.download_button(f"⬇ Resumes used ({nz}, ZIP)", z, file_name=f"{label}_resumes.zip",
+                           mime="application/zip", disabled=not nz, width="stretch")
+        short = sum(1 for r in report.rows(PID, period, mode) if len((r["_jd_full"] or "").strip()) < report.SHORT_JD)
+        if short:
+            st.warning(f"{short} job(s) have no JD or only the first lines of it (some job sites send a short "
+                       "preview). Open those jobs and click the **J** button to save the full JD before tailoring. "
+                       "The CSV marks them in the **JD complete?** column.")
+        st.caption("Excel: the **JD** column holds the whole JD (wrapped; click a cell to read all of it), "
+                   "**Full JD → Open ↗** jumps to the same JD laid out in paragraphs on the *Job descriptions* sheet.")
 
     duplicates_box()
     duplicate_rules_box()

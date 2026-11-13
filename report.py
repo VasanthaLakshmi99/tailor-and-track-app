@@ -10,8 +10,11 @@ import pandas as pd
 import db
 
 PERIODS = ["Today", "This week", "This month", "Last month", "This year", "All time", "Custom dates…"]
-COLUMNS = ["Company Name", "Apply Link", "Role Title", "JD", "Status", "Applied Date", "Source", "Location",
+COLUMNS = ["Company Name", "Apply Link", "Role Title", "JD", "Full JD", "Status", "Applied Date", "Source", "Location",
            "Match %", "Resume File", "Saved Date", "Candidate"]
+CSV_COLUMNS = ["Job #", "Candidate", "Company Name", "Role Title", "Location", "Apply Link", "Source", "Match %",
+               "Status", "Applied Date", "Saved Date", "JD complete?", "JD"]
+SHORT_JD = 600        # fewer characters than this: probably only the first lines of the JD (Jooble, Reed)
 
 
 def period_range(period):
@@ -38,20 +41,25 @@ def period_range(period):
 
 
 def rows(pid, period, applied_only=True):
+    """applied_only: True = applied jobs, False = all saved jobs, "todo" = jobs not applied yet."""
     start, end = period_range(period)
     p = db.profile(pid)
     out = []
     for j in db.jobs(pid):
         if j["status"] == "hidden":
             continue
-        if applied_only and j["status"] != "applied":
+        if applied_only == "todo":
+            if j["status"] == "applied":
+                continue
+        elif applied_only and j["status"] != "applied":
             continue
-        day = (j["applied_at"] if applied_only else (j["applied_at"] or j["saved_at"])) or ""
+        day = (j["applied_at"] if applied_only is True else (j["applied_at"] or j["saved_at"])) or ""
         if start and not (start <= day[:10] < end):
             continue
         out.append({
             "Company Name": j["company"], "Apply Link": j["apply_url"], "Role Title": j["title"],
-            "JD": (j["jd"] or "")[:32000],                      # Excel's cell limit
+            "JD": (j["jd"] or "")[:32000],                      # Excel's cell limit (the CSV has no limit)
+            "_jd_full": j["jd"] or "", "_id": j["id"],
             "Status": "Applied" if j["status"] == "applied" else "Not applied",
             "Applied Date": (j["applied_at"] or "")[:16], "Source": j["source"], "Location": j["location"],
             "Match %": j["tailored_match"] or j["match"],
@@ -70,7 +78,8 @@ def excel(pid, period, applied_only=True):
     with pd.ExcelWriter(buf, engine="openpyxl") as xw:
         df.to_excel(xw, index=False, sheet_name="Applications")
         ws = xw.sheets["Applications"]
-        widths = {"A": 26, "B": 40, "C": 32, "D": 60, "E": 12, "F": 17, "G": 14, "H": 22, "I": 9, "J": 34, "K": 17, "L": 18}
+        widths = {"A": 26, "B": 40, "C": 32, "D": 90, "E": 10, "F": 12, "G": 17, "H": 14, "I": 22, "J": 9, "K": 34,
+                  "L": 17, "M": 18}
         for col, w in widths.items():
             ws.column_dimensions[col].width = w
         from openpyxl.styles import Alignment, Font, PatternFill
@@ -84,7 +93,7 @@ def excel(pid, period, applied_only=True):
             if link.value:
                 link.hyperlink = link.value
                 link.font = Font(color="2448C8", underline="single")
-            ws.row_dimensions[row[0].row].height = 60
+            ws.row_dimensions[row[0].row].height = 150       # the whole JD is in the cell: click it to read all
         ws.freeze_panes = "A2"
         ws.auto_filter.ref = ws.dimensions
         _jd_sheet(xw.book, ws, data)
@@ -116,7 +125,7 @@ def _jd_sheet(book, apps, data):
     from openpyxl.styles import Alignment, Font, PatternFill
     js = book.create_sheet("Job descriptions")
     js.column_dimensions["A"].width = 130
-    jd_col = COLUMNS.index("JD") + 1
+    jd_col = COLUMNS.index("Full JD") + 1
     row = 1
     for i, d in enumerate(data, start=2):
         head = js.cell(row=row, column=1, value=f"{d['Company Name']} · {d['Role Title']}")
@@ -134,10 +143,11 @@ def _jd_sheet(book, apps, data):
             c.alignment = Alignment(wrap_text=True, vertical="top")
             row += 1
         row += 1                                              # empty row between jobs
-        cell = apps.cell(row=i, column=jd_col)                # Applications: click the JD to read it in full
+        cell = apps.cell(row=i, column=jd_col)                # Applications: "Open" jumps to the readable JD
         from openpyxl.worksheet.hyperlink import Hyperlink
-        cell.hyperlink = Hyperlink(ref=cell.coordinate, location=f"'Job descriptions'!A{top}", display="Full JD")
-        cell.font = Font(color="2448C8")
+        cell.value = "Open ↗"
+        cell.hyperlink = Hyperlink(ref=cell.coordinate, location=f"'Job descriptions'!A{top}", display="Open ↗")
+        cell.font = Font(color="2448C8", underline="single")
     js.freeze_panes = "A1"
 
 
@@ -164,3 +174,20 @@ def file_label(pid, period):
     import re
     who = re.sub(r"[^A-Za-z0-9]+", "_", p["name"] if p else "profile").strip("_")
     return f"TailorTrack_{who}_{period_name(period).replace(' ', '_')}_{db.today()}"
+
+
+def csv_file(pid, period, applied_only=True):
+    """Every job with its complete JD (no length limit), for tailoring with Claude / ChatGPT.
+    UTF-8 with BOM so Excel opens it correctly too."""
+    import csv
+    data = rows(pid, period, applied_only)
+    buf = io.StringIO()
+    w = csv.writer(buf, quoting=csv.QUOTE_ALL, lineterminator="\r\n")
+    w.writerow(CSV_COLUMNS)
+    for n, d in enumerate(data, start=1):
+        jd = (d["_jd_full"] or "").replace("\r\n", "\n").strip()
+        done = ("No: no JD saved (open the job and click J)" if not jd else
+                f"Maybe not: only {len(jd)} characters (open the job and click J)" if len(jd) < SHORT_JD else "Yes")
+        w.writerow([n, d["Candidate"], d["Company Name"], d["Role Title"], d["Location"], d["Apply Link"], d["Source"],
+                    d["Match %"], d["Status"], d["Applied Date"], d["Saved Date"], done, jd])
+    return ("\ufeff" + buf.getvalue()).encode("utf-8"), len(data)
