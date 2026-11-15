@@ -1,6 +1,8 @@
 """Tailor&Track - run with:  streamlit run app.py"""
 import json
+import logging
 import re
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -16,6 +18,11 @@ import sponsors
 import uk_employers
 import tailor
 import autotailor
+
+if sys.platform == "win32":
+    # Windows prints harmless socket messages when a browser tab closes or the app is stopped with Ctrl+C
+    # ("WinError 995 / 10053 / 10054", "Task exception was never retrieved"). Nothing is wrong: hide them.
+    logging.getLogger("asyncio").setLevel(logging.CRITICAL)
 
 st.set_page_config(page_title="Tailor&Track", page_icon="🧵", layout="wide")
 
