@@ -40,8 +40,15 @@ if _old:
 @st.cache_resource  # runs once, when the app starts
 def start_receiver():
     db.init_db()
-    db.rescore_all()  # keeps every saved job's match % up to date with the latest scoring
-    collectors.prune_waiting()  # removes collected jobs that don't fit the resume roles / level / location
+
+    def tidy():   # in the background, so the app opens at once
+        try:
+            db.rescore_all()            # every saved job's match % with the latest scoring (only after an update)
+            collectors.prune_waiting()  # removes collected jobs that don't fit the resume roles / level / location
+        except Exception as e:          # the database was busy: it's done again on the next start
+            print(f"Tailor&Track: background tidy-up skipped ({e})")
+    import threading
+    threading.Thread(target=tidy, daemon=True, name="tt-tidy").start()
     status = api_server.start()
     if status == "running":   # only one copy of the app runs the daily collector
         collectors.start_daily()
@@ -138,6 +145,23 @@ def roles_text(roles):
     return f"{len(roles)} target roles: " + ", ".join(roles[:4]) + f" … +{len(roles) - 4} more"
 
 
+def resume_change_note(text):
+    """What happened when a new master resume was saved (shown after the upload)."""
+    ch = db.save_resume.changes or {}
+    msg = f"Saved. Read {len(text.split())} words. All jobs were re-scored."
+    if ch.get("roles"):
+        old, new = ch["roles"]
+        msg += (f"  \n🔄 **This resume is for different jobs, so the target roles were updated** to: "
+                f"{', '.join(new[:6])}{' …' if len(new) > 6 else ''}"
+                + (f" (before: {', '.join(old[:3])}{' …' if len(old) > 3 else ''})." if old else ".")
+                + "  \nNext **Collect now** searches for these roles. Edit them any time under 👤 Profiles → Target roles.")
+        if ch.get("skills_cleared"):
+            msg += "  \nThe confirmed skills of the previous resume were cleared (they belonged to it)."
+        if ch.get("removed"):
+            msg += f"  \n{ch['removed']} collected job(s) for the old roles were removed (applied jobs are kept)."
+    return msg
+
+
 def master_resume_box():
     """Upload / check the master resume of the candidate picked in 'Working for'."""
     has = bool(P.get("text"))
@@ -148,7 +172,7 @@ def master_resume_box():
         if up and st.button("Save master resume", type="primary", key=f"save_master_{PID}"):
             try:
                 text = db.save_resume(PID, up.name, up.getvalue())
-                st.session_state["resume_msg"] = f"Saved. Read {len(text.split())} words. All jobs were re-scored."
+                st.session_state["resume_msg"] = resume_change_note(text)
                 st.rerun()
             except Exception as e:
                 st.error(f"Could not read this file: {e}")
@@ -1139,7 +1163,7 @@ def profile_box(p, active):
     if up and st.button("Save resume", type="primary", key=f"save_resume_{pid}"):
         try:
             text = db.save_resume(pid, up.name, up.getvalue())
-            st.session_state["profile_msg"] = f"Resume saved for {p['name']} ({len(text.split())} words). Jobs re-scored."
+            st.session_state["profile_msg"] = f"Resume saved for {p['name']}. " + resume_change_note(text)
             st.rerun()
         except Exception as e:
             st.error(f"Could not read this file: {e}")

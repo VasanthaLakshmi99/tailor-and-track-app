@@ -201,8 +201,9 @@ def jd_terms(jd, resume_text):
 
 
 _CANON = {n.lower(): n for n in matching.SKILLS}
-_PRACTICES = ({t.lower() for t in matching.EXTRA_TERMS} | {t.lower() for t in matching.TECH_WORDY if t.upper() != t}
-              | {n.lower() for n in matching.SKILLS if n not in matching.TECH_NAMES})
+_PRACTICES = ({t.lower() for t in matching.EXTRA_TERMS}                       # "incident response", "on-call"
+              | {n.lower() for n in matching.SKILLS if n not in matching.TECH_NAMES and " " in n
+                 and not re.search(r"[A-Z]{2}", n)})                            # "work authorization", not "Oracle HCM"
 _KNOWN_LOW = {n.lower() for n in matching.SKILLS} | {a.lower() for v in matching.SKILLS.values() for a in v}
 _BUSINESS_LOW = ({n.lower() for n in matching.SKILLS if n not in matching.TECH_NAMES} |
                  {a.lower() for n, v in matching.SKILLS.items() if n not in matching.TECH_NAMES for a in v} |
@@ -221,7 +222,7 @@ def _known_skill(d):
 def gaps(job, resume_text):
     """JD keywords (hard skills first, then soft skills) the resume doesn't show: what the user may tick.
     Left out: the company's own initials ('TNM'), and business words ('recruiting', 'KPIs') for a tech resume."""
-    tech = matching.is_tech(resume_text)
+    tech = matching.resume_is_tech(resume_text)
     initials = _company_initials(job.get("company"))
     out = [disp for disp, key, w, kind in matching.jd_keywords(job.get("jd") or "", resume_text, job.get("company") or "")
            if not matching.has_keyword(resume_text, disp, key) and key not in initials
@@ -313,7 +314,7 @@ def _skills_for_jd(cats, jd_spellings):
                 target = ["Additional Skills", []]
                 at = next((i for i, c in enumerate(cats) if NO_ADD_CATS.search(c[0])), len(cats))
                 cats.insert(at, target)
-        target[1].append(nice(sp))
+        target[1].append(canon(sp) if sp.islower() or re.match(r"[a-z]+ [A-Z]", sp) else sp)   # a Skills list: "Service Delivery"
         all_low += " " + sp.lower()
     pats = [matching._pattern(sp) for sp in jd_spellings]
     for c in cats:                                            # JD keywords first inside each category
@@ -333,6 +334,9 @@ def nice(d):
     """'Rostering' -> 'rostering' inside a sentence (tool names and acronyms keep their capitals)."""
     if d and d[0].isupper() and d[1:2].islower() and d.lower() not in PRODUCTS and \
             d.lower() in {k.lower() for k in matching.BUSINESS_SKILLS} | {a for v in matching.BUSINESS_SKILLS.values() for a in v}:
+        words = d.split()
+        if all(w[:1].isupper() and w[1:].islower() for w in words if w.isalpha()):
+            return d.lower()                                  # "Service Delivery" -> "service delivery"
         return d[0].lower() + d[1:]
     return d
 
@@ -543,6 +547,8 @@ def _summary_for_jd(summary, hard, soft, job, title, resume_text, full_title=Fal
         out += "."
     # the JD's top skills the candidate has, in the JD's order of importance (tools before broad phrases)
     tools = [d for d, k, w in hard if k not in GENERIC_TERMS and _known_skill(d)]
+    if not matching.resume_is_tech(resume_text):     # a recruiter knows Java roles but doesn't write Java
+        tools = [d for d in tools if canon(d) not in matching.TECH_NAMES or canon(d) in matching.BUSINESS_SKILLS]
     tools = [d for d in tools if not any(d != o and d.lower() in o.lower() for o in tools)][:5]
     role = title or summary_title(job.get("title") or "", resume_text)
     if full_title:                                   # name the role exactly as the JD does ("Senior DevOps Engineer")
@@ -551,9 +557,9 @@ def _summary_for_jd(summary, hard, soft, job, title, resume_text, full_title=Fal
     if len(tools) >= 2 and role:
         at = f" at {company}" if company and len(company) <= 40 else ""
         if title_backed(role, resume_text) or full_title:
-            out += f" Brings hands-on {_join(tools)} experience to the {role} role{at}."
+            out += f" Brings hands-on {_join([_word(x) for x in tools])} experience to the {role} role{at}."
         else:
-            out += f" Interested in the {role} role{at}, bringing hands-on {_join(tools)} experience."
+            out += f" Interested in the {role} role{at}, bringing hands-on {_join([_word(x) for x in tools])} experience."
     elif role and role.lower() not in (out + " " + resume_text).lower():
         out += f" Interested in the {role} role" + (f" at {company}." if company and len(company) <= 40 else ".")
     if full_title:                                   # Tick all: the JD's practices named once more ("incident response")
@@ -596,7 +602,7 @@ def tailor(job, resume_text, confirmed=(), roles=(), all_jd=False):
     soft = list({k: (d, k, w) for d, k, w in soft}.values())
     in_resume = lambda d, k: matching.has_keyword(resume_text, d, k)
     added = [d for d, k, w in hard if not in_resume(d, k)]                    # ticked by the user, not in the resume
-    tech = matching.is_tech(resume_text)
+    tech = matching.resume_is_tech(resume_text)
 
     roles = list(roles or []) or matching.roles_from_resume(resume_text)
     fit = matching.title_fit(job.get("title") or "", roles)
@@ -867,9 +873,8 @@ def _render(r, SIZE=10.3, LH=12.6, GAP=0):
         pdf.set_font(font, "B", 13)
         name_url = (r.get("anchors") or {}).get(" ".join(r["name"].lower().split()))
         pdf.cell(w, 16, fix(r["name"]), align="C", new_x="LMARGIN", new_y="NEXT", link=_href(name_url) if name_url else "")
-    if r.get("headline"):                                     # the master's own headline line, unchanged
-        pdf.set_font(font, "", 10.8)
-        pdf.multi_cell(w, 13, fix(r["headline"]), align="C", new_x="LMARGIN", new_y="NEXT")
+    # no headline / role-titles line under the name ("Talent Acquisition | US/UK IT Recruitment | …"):
+    # the header is name + contact only; the summary says which role the candidate wants
     if r.get("contact"):
         pdf.set_font(font, "", 10.8)
         linked_contact(pdf, fix, r["contact"], r.get("links") or [], w, 13, r.get("anchors"))

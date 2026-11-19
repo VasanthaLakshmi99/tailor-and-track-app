@@ -57,7 +57,7 @@ class _Connection(sqlite3.Connection):
 
 
 def connect():
-    con = sqlite3.connect(DB_PATH, timeout=10, check_same_thread=False, factory=_Connection)
+    con = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False, factory=_Connection)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA synchronous=NORMAL")       # with WAL (set once in init_db): safe and much faster writes
     return con
@@ -256,12 +256,35 @@ def extract_text(filename, data):
 
 
 def save_resume(pid, filename, data):
+    """Save a new master resume. If it is a different kind of job than before (e.g. DevOps -> Recruiter), the old
+    target roles and confirmed skills belong to the old resume: they are replaced, and jobs collected for the old
+    roles that were not applied to are removed. Returns the text; what changed is in save_resume.changes."""
     text = extract_text(filename, data)
+    old = profile(pid) or {}
+    old_roles, new_roles = role_list(old), matching.roles_from_resume(text)
+    changed = {}
+    if new_roles and (not old_roles or not any(matching.title_fit(r, new_roles) for r in old_roles[:6])):
+        changed["roles"] = (old_roles, new_roles)
     with connect() as con:
         con.execute("UPDATE profiles SET filename=?, data=?, text=?, uploaded_at=? WHERE id=?",
                     (filename, data, text, now(), pid))
+        if changed.get("roles"):
+            con.execute("UPDATE profiles SET roles=? WHERE id=?", (", ".join(new_roles), pid))
+            if old.get("text"):                                   # a different kind of resume: old ticks don't apply
+                con.execute("UPDATE profiles SET confirmed_skills='' WHERE id=?", (pid,))
+                changed["skills_cleared"] = bool((old.get("confirmed_skills") or "").strip())
     rescore(pid)
+    if changed.get("roles") and old.get("text"):
+        try:
+            import collectors
+            changed["removed"] = collectors.prune_waiting() or 0
+        except Exception:
+            changed["removed"] = 0
+    save_resume.changes = changed
     return text
+
+
+save_resume.changes = {}
 
 
 _URL = re.compile(r"(?:https?://|www\.)[^\s<>\"')]+|(?<![@\w])(?:[a-z0-9-]+\.)?(?:linkedin\.com|github\.com|gitlab\.com|"
@@ -354,6 +377,20 @@ def resume_anchors(p):
                         out.setdefault(label.lower(), h.address)
     except Exception:
         pass
+    # "LinkedIn" / "GitHub" / "Portfolio" written as plain words with no link behind them:
+    # use the URLs saved in 👤 Profiles → Application form answers
+    if p.get("id"):
+        try:
+            saved = json.loads(setting(f"apply_info_{p['id']}") or "{}")
+        except ValueError:
+            saved = {}
+        for words, key in ((("linkedin", "linkedin profile"), "linkedin"), (("github",), "github"),
+                           (("portfolio", "website", "my portfolio"), "website")):
+            url = (saved.get(key) or "").strip()
+            if url and not any(w in out for w in words):
+                url = url if re.match(r"https?://", url) else "https://" + url
+                for w in words:
+                    out.setdefault(w, url)
     return out
 
 
@@ -397,18 +434,54 @@ def match_for(pid, jd, title=""):
             "fit": matching.title_fit(title, roles_for_search(p)), "has_roles": bool(roles_for_search(p))}
 
 
+def _write_retry(sql, rows, tries=6):
+    """Write in small batches; if another part of the app is writing at that moment, wait and try again."""
+    import time
+    for i in range(0, len(rows), 200):
+        batch = rows[i:i + 200]
+        for attempt in range(tries):
+            try:
+                with connect() as con:
+                    con.executemany(sql, batch)
+                break
+            except sqlite3.OperationalError as e:
+                if "locked" not in str(e).lower() or attempt == tries - 1:
+                    raise
+                time.sleep(1 + attempt * 2)
+
+
 def rescore(pid):
+    """Match % of every saved job for this profile: scored first, then saved in quick batches
+    (the database is never held for long, so it can't be 'locked' for the rest of the app)."""
     p = profile(pid)
     text, roles = scoring_text(p), roles_for_search(p)
     with connect() as con:
-        for r in con.execute("SELECT id, jd, title FROM jobs WHERE profile_id=?", (pid,)).fetchall():
-            pct, _, missing = matching.score(r["jd"] or "", text, r["title"] or "", roles)
-            con.execute("UPDATE jobs SET match=?, missing=? WHERE id=?", (pct, json.dumps(missing), r["id"]))
+        jobs_ = con.execute("SELECT id, jd, title FROM jobs WHERE profile_id=?", (pid,)).fetchall()
+    rows = []
+    for r in jobs_:
+        pct, _, missing = matching.score(r["jd"] or "", text, r["title"] or "", roles)
+        rows.append((pct, json.dumps(missing), r["id"]))
+    _write_retry("UPDATE jobs SET match=?, missing=? WHERE id=?", rows)
 
 
-def rescore_all():
+def _scoring_signature():
+    """Changes when matching.py changes (a new version of the scoring)."""
+    import hashlib
+    try:
+        return hashlib.md5(Path(matching.__file__).read_bytes()).hexdigest()
+    except OSError:
+        return ""
+
+
+def rescore_all(force=False):
+    """Re-score every saved job, only when the scoring code changed since last time (or force=True)."""
+    sig = _scoring_signature()
+    if not force and sig and setting("score_signature") == sig:
+        return False
     for p in profiles():
         rescore(p["id"])
+    set_setting("score_signature", sig)
+    return True
 
 
 # ---------------------------------------------------------------- cleaning

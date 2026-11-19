@@ -268,6 +268,21 @@ BUSINESS_SKILLS = {
     "Sales": ["sales targets", "revenue targets"], "Applicant Tracking System": ["ats", "bullhorn", "greenhouse"],
     "Employer Branding": [], "Interviewing": ["competency-based interviews", "interviews"], "Onboarding": ["induction"],
     "Vendor Management": ["supplier management", "msp", "rpo"], "Contract Management": [],
+    "Boolean Search": ["boolean", "x-ray search", "xray search", "boolean and x-ray search"],
+    "Candidate Screening": ["screening calls", "phone screening", "pre-screening", "pre-interview screening", "resume screening"],
+    "Interview Scheduling": ["interview coordination", "scheduling interviews", "coordinate interviews"],
+    "IT Recruitment": ["technical recruiting", "technical recruitment", "it recruiting", "us it recruitment",
+                       "us it staffing", "it staffing", "tech recruiting"],
+    "Bench Sales": ["bench marketing", "bench recruiter"], "LinkedIn Recruiter": ["linkedin recruiter lite"],
+    "Job Boards": ["dice", "monster", "careerbuilder", "naukri", "totaljobs", "cv-library", "cv library"],
+    "Ceipal": [], "JobDiva": [], "Zoho Recruit": [], "iCIMS": [], "Taleo": [], "Lever": [], "SmartRecruiters": [],
+    "Work Authorization": ["h1b", "h-1b", "opt", "stem opt", "gc-ead", "h4-ead", "cpt", "visa status", "right to work",
+                           "right-to-work"],
+    "US Tax Terms": ["w2", "c2c", "1099", "corp to corp", "corp-to-corp"], "IR35": [],
+    "Rate Negotiation": ["salary negotiation", "day-rate negotiation", "offer negotiation"],
+    "Pipeline Management": ["candidate pipeline", "talent pipeline", "pipeline tracking"],
+    "Recruitment Metrics": ["time-to-fill", "time to fill", "time-to-hire", "submission-to-interview"],
+    "Offer Management": ["offer letters", "offer and onboarding"], "Background Checks": ["background verification", "bgv"],
     # HR
     "HR Business Partnering": ["hrbp", "hr business partner", "business partnering"], "Employee Relations": ["er casework", "er cases"],
     "Employment Law": ["uk employment law", "tupe"], "Performance Management": [], "Talent Management": ["succession planning"],
@@ -278,7 +293,8 @@ BUSINESS_SKILLS = {
     "Employee Engagement": [], "Diversity and Inclusion": ["dei", "equality diversity and inclusion", "ed&i"],
     "CIPD": [], "HRIS": ["hr systems", "hr system", "human resources information system"],
     "Workday": [], "SuccessFactors": ["sap successfactors"], "PeopleSoft": ["peoplesoft hcm"], "Oracle HCM": [],
-    "BambooHR": [], "Cornerstone": [],
+    "BambooHR": [], "Cornerstone": [], "HRMS": ["hr management system"], "Employee Data Management": ["employee records",
+    "employee data"], "Statutory Compliance": ["pf", "esi", "provident fund", "pf and esi"], "HR Operations": ["hr ops"],
     # operations / management
     "Stakeholder Engagement": ["stakeholder relationships", "stakeholders"], "Team Leadership": ["people management", "line management", "team management", "managing a team"],
     "Coaching": ["mentoring"], "Budget Management": ["budgets", "budgeting", "p&l"], "Process Improvement": ["continuous improvement", "lean", "six sigma"],
@@ -291,7 +307,8 @@ BUSINESS_SKILLS = {
 SKILLS.update(BUSINESS_SKILLS)
 AMBIGUOUS |= {"forecast", "roster", "reward", "benefits", "sales", "interviews", "audit", "induction", "stakeholders",
               "headcount", "resourcing", "transformation", "lean", "budgets", "dashboard", "staffing", "immigration",
-              "kpi", "msp", "ats", "greenhouse", "bullhorn"}
+              "kpi", "msp", "ats", "greenhouse", "bullhorn", "boolean", "dice", "monster", "opt", "cpt", "pf", "esi",
+              "lever", "w2", "1099"}
 # tech words that mean something else in a business JD ("networking" = meeting people, "pipeline" = candidates)
 TECH_WORDY = {"Networking", "Docker", "Bash", "Observability", "ELB", "Security", "High Availability", "Git", "Oracle",
               "REST API", "SRE", "Machine Learning", "Statistics", "Routing", "Switching", "Lightning", "Express"}
@@ -514,6 +531,12 @@ COMMON_TITLES = [
     "Business Analyst", "Project Manager", "Scrum Master", "Product Manager", "Product Owner",
     "Salesforce Developer", "Salesforce Administrator", "SAP Consultant", "Network Engineer", "Security Engineer",
     "Cybersecurity Analyst", "Security Analyst", "Systems Administrator", "System Administrator", "Linux Administrator",
+    # recruiting / HR
+    "Technical Recruiter", "IT Recruiter", "US IT Recruiter", "UK IT Recruiter", "Recruiter", "Talent Acquisition Specialist",
+    "Talent Acquisition Coordinator", "Talent Acquisition Associate", "Talent Acquisition Partner", "Recruitment Coordinator",
+    "Recruiting Coordinator", "Recruitment Associate", "Recruitment Consultant", "Sourcer", "Sourcing Specialist",
+    "Bench Sales Recruiter", "HR Executive", "HR Generalist", "HR Coordinator", "HR Associate", "HR Assistant",
+    "HR Operations Associate", "HR Operations Executive", "Payroll Specialist", "Payroll Executive", "People Operations",
 ]
 
 
@@ -571,7 +594,32 @@ ROLE_FAMILIES = [
      ["Security Engineer", "Cybersecurity Analyst", "SOC Analyst", "Security Analyst"]),
     ({"MySQL", "PostgreSQL", "Oracle", "SQL Server", "MongoDB", "Redis", "Cassandra"},
      ["Database Administrator", "Database Engineer"]),
+    ({"Recruitment", "End-to-End Recruitment", "Candidate Sourcing", "Boolean Search", "Candidate Screening",
+      "Interview Scheduling", "IT Recruitment", "Bench Sales", "LinkedIn Recruiter", "Job Boards", "Applicant Tracking System",
+      "Ceipal", "JobDiva", "Zoho Recruit", "Work Authorization", "US Tax Terms", "IR35", "Rate Negotiation",
+      "Pipeline Management", "Recruitment Metrics", "Offer Management", "Interviewing", "Onboarding"},
+     ["Recruiter", "Technical Recruiter", "IT Recruiter", "US IT Recruiter", "Talent Acquisition Specialist",
+      "Talent Acquisition Coordinator", "Recruitment Coordinator", "Recruiting Coordinator", "Recruitment Associate",
+      "Sourcing Specialist", "Sourcer", "Talent Acquisition Associate", "Bench Sales Recruiter", "UK IT Recruiter"]),
+    ({"HRMS", "HRIS", "Payroll", "Employee Data Management", "Statutory Compliance", "HR Operations", "Onboarding",
+      "Employee Relations", "HR Policies", "Compensation and Benefits", "Performance Management", "Background Checks"},
+     ["HR Executive", "HR Generalist", "HR Coordinator", "HR Operations Associate", "HR Associate", "Payroll Specialist",
+      "HR Assistant", "People Operations Associate"]),
 ]
+
+# Resumes whose own job is people / business work (they may list tech skills they hire for, but they are not tech)
+_PEOPLE_HEADLINE = re.compile(r"recruit|talent acquisition|human resources|hr|payroll|staffing|sourcing specialist|"
+                              r"people operations|workforce planning|resourcing", re.I)
+
+
+def resume_is_tech(resume_text):
+    """A tech resume: tech tools AND the candidate's own titles are not recruiting / HR / workforce roles."""
+    if not is_tech(resume_text):
+        return False
+    head = (resume_text or "")[:400]
+    roles = roles_from_resume(resume_text)
+    people = sum(1 for r in roles[:4] if _PEOPLE_HEADLINE.search(r))
+    return not (_PEOPLE_HEADLINE.search(head) and people >= 1)
 
 
 GENERIC_TITLES = {"Software Engineer", "Software Developer"}
@@ -587,8 +635,10 @@ def years_of_experience(resume_text):
 def roles_from_resume(resume_text, limit=14):
     """Roles worth searching for this resume: the main profile (from the summary) and its sub-roles.
     Other skill areas are added only if they are almost as strong as the main one."""
-    head = (resume_text or "")[:700]                          # name, headline and summary
+    head = (resume_text or "")[:1200]                         # name, headline and summary
     titles = [t for t in guess_roles(head) if t not in GENERIC_TITLES]
+    if _PEOPLE_HEADLINE.search(head[:300]):                    # a recruiter's skills list names the tech she hires for
+        titles = [t for t in titles if _PEOPLE_HEADLINE.search(t)]
     have = set(find_skills(resume_text).keys())
     families = []
     for skills, roles in ROLE_FAMILIES:
@@ -596,6 +646,8 @@ def roles_from_resume(resume_text, limit=14):
         if hits >= 3 or (hits >= 2 and len(skills) <= 6):
             families.append((hits, roles))
     families.sort(key=lambda f: -f[0])
+    if _PEOPLE_HEADLINE.search(head[:300]):
+        families = [f for f in families if any(_PEOPLE_HEADLINE.search(r) for r in f[1])] or families
     out = list(titles)
     if families:
         top = families[0][0]
@@ -705,7 +757,13 @@ HR_BOILER = {"compensation and benefits", "onboarding", "recruiting", "recruitme
              "work permits", "rpo", "payroll", "interviewing", "employer branding", "talent management",
              "candidate sourcing", "end-to-end recruitment", "people-management", "global mobility", "internal mobility",
              "employee engagement", "employee relations", "learning and development", "absence management",
-             "hr policies", "talent acquisition", "benefits", "utilization", "utilisation"}
+             "hr policies", "talent acquisition", "benefits", "utilization", "utilisation",
+             # visa / contract / hiring words in a tech JD's small print ("W2 only", "no H-1B sponsorship")
+             "work authorization", "us tax terms", "ir35", "job boards", "background checks", "offer management",
+             "rate negotiation", "bench sales", "statutory compliance", "it recruitment", "candidate screening",
+             "interview scheduling", "pipeline management", "recruitment metrics", "boolean search", "linkedin recruiter",
+             "h1b", "h-1b", "opt", "stem opt", "gc-ead", "h4-ead", "cpt", "w2", "c2c", "1099", "corp to corp",
+             "corp-to-corp", "right to work", "right-to-work", "visa status"}
 
 
 def is_tech(text):

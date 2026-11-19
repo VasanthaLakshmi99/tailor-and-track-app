@@ -1519,7 +1519,7 @@ def _profile_is_tech(p):
     text = (p or {}).get("text") or ""
     key = ((p or {}).get("id"), len(text))
     if key not in _TECH_CACHE:
-        _TECH_CACHE[key] = matching.is_tech(text)
+        _TECH_CACHE[key] = matching.resume_is_tech(text)
     return _TECH_CACHE[key]
 
 
