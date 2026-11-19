@@ -1066,7 +1066,8 @@ def profiles_page():
     with st.expander("➕ Add a profile", expanded=False):
         with st.form("new_profile", clear_on_submit=True):
             n = st.text_input("Candidate name", placeholder="e.g. Priya - QA")
-            r = st.text_input("Target roles (comma separated)", placeholder="e.g. QA Engineer, Test Automation Engineer, SDET")
+            r = st.text_area("Target roles (comma separated, no length limit)", height=80, max_chars=None,
+                             placeholder="e.g. QA Engineer, Test Automation Engineer, SDET")
             lc = st.text_input("Locations (comma separated, blank = anywhere)", placeholder="e.g. United States, Remote")
             if st.form_submit_button("Add profile", type="primary") and n.strip():
                 new_id = db.add_profile(n, r)
@@ -1119,10 +1120,11 @@ def profile_box(p, active):
         st.rerun()
     with st.form(f"edit_{pid}"):
         name = st.text_input("Name", p["name"])
-        roles = st.text_input("Target roles (comma separated)", p["roles"] or "",
-                              placeholder="e.g. DevOps Engineer, Cloud Engineer, Site Reliability Engineer, Platform Engineer")
+        roles = st.text_area("Target roles (comma separated, no length limit)", p["roles"] or "", height=90,
+                             max_chars=None,
+                             placeholder="e.g. DevOps Engineer, Cloud Engineer, Site Reliability Engineer, Platform Engineer")
         locs = st.text_input("Locations for automatic collection (comma separated, blank = from the resume)",
-                             p.get("locations") or "", placeholder="e.g. United States, Remote")
+                             p.get("locations") or "", placeholder="e.g. United States, Remote", max_chars=None)
         v1, v2 = st.columns([2, 1], vertical_alignment="bottom")
         visa = v1.text_input("Needs visa sponsorship for (countries, comma separated)",
                              db.setting(f"visa_need_{pid}"), placeholder="e.g. United Kingdom",
