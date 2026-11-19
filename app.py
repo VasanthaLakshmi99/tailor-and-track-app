@@ -57,6 +57,9 @@ def start_receiver():
         if any("united kingdom" in ",".join(sponsors.needs_visa(p) + collectors.locations_for(p)).lower()
                for p in db.profiles()) and not db.setting("uk_finder_at"):
             collectors.start_uk_finder()          # careers sites of the big UK sponsor employers, once
+        elif any("india" in ",".join(collectors.locations_for(p)).lower() for p in db.profiles()) \
+                and not db.setting("india_finder_at"):
+            collectors.start_india_finder()       # careers sites of the India employers, once
     return status
 
 
@@ -358,7 +361,7 @@ def uk_sponsor_finder_box():
                 f"Banks, consultancies, tech, pharma, retail, energy, universities, law firms and recruitment agencies "
                 f"that hold a UK sponsor licence. Tailor&Track finds each one's careers site once and checks it on every "
                 f"Collect. Checked **{len(res)}/{total}**, careers sites found **{len(found)}**.")
-    if collectors._FINDER["running"]:
+    if collectors._FINDER["running"] and collectors._FINDER.get("which") == "UK":
         st.info(f"⏳ Finding careers sites… {collectors._FINDER['done']}/{collectors._FINDER['total']} checked, "
                 f"{collectors._FINDER['found']} found. You can keep using the app; click 🔄 Refresh list to update.")
     c1, c2 = st.columns(2)
@@ -378,6 +381,49 @@ def uk_sponsor_finder_box():
                        "its careers site automatically when a saved job links to one it can read.")
             st.dataframe(pd.DataFrame([{"Company": n, "Careers site": v.split(":", 1)[0].title() if v != "none" else "—"}
                                        for n, v in sorted(res.items())]), hide_index=True, width="stretch", height=300)
+
+
+def india_finder_box():
+    """Careers pages of ~730 employers in India (agencies, RPO, HR consulting, IT services, GCCs, startups …),
+    found once and checked on every Collect."""
+    import india_employers
+    emps = india_employers.employers()
+    total = len(emps)
+    res = collectors.india_finder_results()
+    found = {n: v for n, v in res.items() if v != "none"}
+    st.markdown(f"**🇮🇳 Employers in India ({total})**  \n"
+                "Recruitment agencies (Hays, Michael Page, Randstad, TeamLease …), RPO and executive search, HR "
+                "consulting, Big 4, IT services, BPOs, GCCs, Indian product companies and remote-first companies. "
+                "Tailor&Track opens each careers page once, finds the job system behind it and checks it on every "
+                f"Collect (jobs still have to fit the profile's roles and locations). Checked **{len(res)}/{total}**, "
+                f"readable careers sites found **{len(found)}**.")
+    running = collectors._FINDER["running"]
+    if running and collectors._FINDER.get("which") == "India":
+        st.info(f"⏳ Checking careers pages… {collectors._FINDER['done']}/{collectors._FINDER['total']} checked, "
+                f"{collectors._FINDER['found']} found. You can keep using the app; click 🔄 Refresh list to update.")
+    elif running:
+        st.caption("The UK finder is running; start this one when it has finished.")
+    c1, c2 = st.columns(2)
+    if c1.button("🔎 Find India careers sites" if len(res) < total else "✓ Done · check for new ones",
+                 disabled=running, width="stretch", key="india_find",
+                 help="One time, runs in the background (about 10–20 minutes). Needs the internet."):
+        collectors.start_india_finder()
+        st.rerun()
+    if res and c2.button("↻ Check all again", disabled=running, width="stretch", key="india_again",
+                         help="Companies sometimes move to a new careers site. Once every few months is enough."):
+        collectors.start_india_finder(force=True)
+        st.rerun()
+    with st.expander(f"All {total} employers, with their careers pages"
+                     + (f" · found {len(found)}, not found {len(res) - len(found)}" if res else "")):
+        st.caption("Not found = the careers page runs on a system that can't be read for free (SuccessFactors, Taleo, "
+                   "iCIMS, the company's own site …). Open its careers page and save jobs with the J button, or find "
+                   "them through Naukri / LinkedIn. Edit the list in india_employers.py.")
+        st.dataframe(pd.DataFrame([{"Company": n, "Type": k, "Careers page": u,
+                                    "Collected by the app": (res[n].split(":", 1)[0].title() if res.get(n, "none") != "none"
+                                                             else ("—" if n in res else "not checked yet"))}
+                                   for k, n, u in emps]),
+                     hide_index=True, width="stretch", height=320,
+                     column_config={"Careers page": st.column_config.LinkColumn("Careers page")})
 
 
 def collection_settings():
@@ -439,6 +485,7 @@ def collection_settings():
                 db.set_setting(f"feed_{key}", "1" if on else "0")
 
     uk_sponsor_finder_box()
+    india_finder_box()
 
     all_boards = collectors.boards()
     st.markdown(f"**Company career boards ({len(all_boards)})**  \nPaste a company's careers page link. "

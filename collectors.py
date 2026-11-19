@@ -1837,7 +1837,7 @@ def start_daily():
 # (SuccessFactors, Taleo, iCIMS, Eightfold, own sites) are still reached through Reed, Jooble and JSearch.
 FINDER_THREADS = 8
 _finder_lock = threading.Lock()
-_FINDER = {"running": False, "done": 0, "total": 0, "found": 0}
+_FINDER = {"running": False, "done": 0, "total": 0, "found": 0, "which": ""}
 _SLUG_SKIP = {"university", "royal", "british", "global", "united", "national", "the", "group", "international", "first",
               "general", "capital", "american", "london", "oxford", "cambridge", "virgin", "three", "next", "global"}
 _SLUG_DROP = {"plc", "ltd", "limited", "group", "uk", "the", "holdings", "company", "co", "inc", "llp", "of"}
@@ -1946,7 +1946,7 @@ def find_uk_sponsor_boards(force=False, limit=None):
         init()
         results = {} if force else finder_results()
         todo = [n for _, n in uk_employers.employers() if n not in results][:limit]
-        _FINDER.update(running=True, done=0, total=len(todo), found=0)
+        _FINDER.update(running=True, done=0, total=len(todo), found=0, which="UK")
         known = {(b["provider"], b["token"].lower()) for b in boards()}
 
         def one(name):
@@ -1973,6 +1973,70 @@ def find_uk_sponsor_boards(force=False, limit=None):
     finally:
         _FINDER["running"] = False
         _finder_lock.release()
+
+
+def india_finder_results():
+    try:
+        return json.loads(db.setting("india_finder") or "{}")
+    except ValueError:
+        return {}
+
+
+def find_india_boards(force=False, limit=None):
+    """Find the job system behind each India employer's careers page (india_employers.py) once, and add the ones
+    Tailor&Track can read as company boards: first from the careers page itself (links to Workday, Greenhouse …),
+    then by the company's name, like the UK finder."""
+    import india_employers
+    if not _finder_lock.acquire(blocking=False):
+        return _FINDER
+    try:
+        init()
+        results = {} if force else india_finder_results()
+        todo = [(n, u) for _, n, u in india_employers.employers() if n not in results][:limit]
+        _FINDER.update(running=True, done=0, total=len(todo), found=0, which="India")
+        known = {(b["provider"], b["token"].lower()) for b in boards()}
+
+        def one(item):
+            name, url = item
+            hit = None
+            if url:
+                try:
+                    hit = discover(url)
+                except Exception:
+                    hit = None
+            if not hit:
+                clean = re.sub(r"\s*\(.*?\)|\s+india\b.*$", "", name, flags=re.I).strip() or name
+                try:
+                    hit = find_board(clean)
+                except Exception:
+                    hit = None
+            return name, hit
+
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+        with ThreadPoolExecutor(max_workers=FINDER_THREADS) as pool:
+            for fut in as_completed([pool.submit(one, it) for it in todo]):
+                name, hit = fut.result()
+                _FINDER["done"] += 1
+                if hit:
+                    _FINDER["found"] += 1
+                    results[name] = f"{hit[0]}:{hit[1]}"
+                    if (hit[0], hit[1].lower()) not in known:
+                        add_board(hit[0], hit[1], f"{name} (India)")
+                        known.add((hit[0], hit[1].lower()))
+                else:
+                    results[name] = "none"
+                if _FINDER["done"] % 20 == 0:
+                    db.set_setting("india_finder", json.dumps(results))
+        db.set_setting("india_finder", json.dumps(results))
+        db.set_setting("india_finder_at", db.now())
+        return dict(_FINDER)
+    finally:
+        _FINDER["running"] = False
+        _finder_lock.release()
+
+
+def start_india_finder(force=False):
+    threading.Thread(target=find_india_boards, kwargs={"force": force}, daemon=True, name="tt-india-finder").start()
 
 
 def start_uk_finder(force=False):
