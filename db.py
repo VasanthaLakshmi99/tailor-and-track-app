@@ -687,8 +687,7 @@ def applied_conflict(pid, company, title, jd="", exclude_id=None):
     Strict rules (companies block candidates for these):
       1. same company (name variants count as one) and the same role (level words ignored), at any time
       2. the same job description at any company (agencies re-post their clients' jobs), at any time
-      3. optional: any role at the same company within the cooldown days (default 0 = off)
-    A different role at the same company is allowed."""
+    A different role at the same company is allowed (never blocked; see recent_at_company for a reminder)."""
     cn, tn, sig = norm_company(company), norm_title(title), jd_signature(jd)
     with connect() as con:
         rows = [dict(r) for r in con.execute("SELECT * FROM jobs WHERE profile_id=? AND status='applied' AND id IS NOT ?",
@@ -701,14 +700,24 @@ def applied_conflict(pid, company, title, jd="", exclude_id=None):
             if r.get("jd_sig") and jd_similarity(sig, r["jd_sig"]) >= SAME_JD:
                 return r, (f"Same job description already applied {_date(r['applied_at'])}: {r['company']} · {r['title']} "
                            "(re-posted by another company or agency)")
-    days = cooldown_days()
-    if strict_mode() and days:
-        cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        for r in rows:
-            if r["company_norm"] == cn and _date(r["applied_at"]) >= cut:
-                left = days - (datetime.now() - datetime.strptime(_date(r["applied_at"]), "%Y-%m-%d")).days
-                return r, (f"Applied to {r['company']} on {_date(r['applied_at'])} ({r['title']}): wait {max(left, 1)} "
-                           f"more day(s) before another application there")
+    return None
+
+
+def recent_at_company(pid, company, title, days=None):
+    """A reminder (not a block): the candidate applied to another role at this company within the last `days`."""
+    days = cooldown_days() if days is None else days
+    if not days:
+        return None
+    cn = norm_company(company)
+    cut = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    with connect() as con:
+        rows = [dict(r) for r in con.execute("SELECT * FROM jobs WHERE profile_id=? AND status='applied' AND company_norm=? "
+                                             "ORDER BY applied_at DESC", (pid, cn))]
+    for r in rows:
+        if _date(r["applied_at"]) >= cut and not same_role(r["title"], title):
+            ago = (datetime.now() - datetime.strptime(_date(r["applied_at"]), "%Y-%m-%d")).days
+            return (f"Different role, OK to apply. You applied to {r['company']} {ago} day(s) ago "
+                    f"({r['title']}).")
     return None
 
 
@@ -760,6 +769,9 @@ def check_duplicate(pid, company, title, url, jd=""):
         if r["status"] == "applied" and _date(r["applied_at"]) >= cutoff and titles_similar(r["title_norm"], tn):
             return "warning", (f"Similar role applied {_date(r['applied_at'])}: "
                                f"{r['title']} ({r['source']})")
+    note = recent_at_company(pid, company, title)
+    if note:
+        return "warning", note
     return "new", "New job"
 
 

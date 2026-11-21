@@ -1727,14 +1727,14 @@ def duplicate_rules_box():
                     "1. to the **same company for the same role**, at any time (AWS = Amazon, JPMorgan Chase = "
                     "JPMorgan; Senior / II / Remote don't make it a different role)\n"
                     "2. to the **same job description** at any company: agencies re-post their clients' jobs\n"
-                    "3. optional: to **any role at the same company** within the cooldown below (0 = off)\n\n"
-                    "A **different role at the same company is allowed**.")
+                    "\nA **different role at the same company is always allowed**. The days below only show a "
+                    "reminder (\"you applied there N days ago\"), never a block.")
         c1, c2 = st.columns(2)
         strict = c1.toggle("Strict mode", value=db.strict_mode(), key="strict_dupes_t",
-                           help="Off: rule 3 is not used, and a re-posted JD only gives a warning.")
-        days = c2.number_input("Cooldown per company (days)", 0, 365, db.cooldown_days(), 5, key="cooldown_in",
-                               help="0 = off (different roles at the same company are allowed). Set e.g. 30 only "
-                                    "if a company limits how often a candidate may apply.")
+                           help="Off: a re-posted JD only gives a warning.")
+        days = c2.number_input("Remind me of other roles at the same company (days)", 0, 365, db.cooldown_days(), 5,
+                               key="cooldown_in", help="Only a yellow reminder in the J box; it never stops a save. "
+                                                       "0 = no reminder.")
         if strict != db.strict_mode():
             db.set_setting("strict_dupes", "1" if strict else "0")
         if days != db.cooldown_days():
